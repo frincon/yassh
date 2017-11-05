@@ -11,7 +11,6 @@
 -- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
-
 module Network.Yassh.Internal
   ( SshRole(..)
   , SshVersion(..)
@@ -21,16 +20,18 @@ module Network.Yassh.Internal
 import Data.ByteString (ByteString)
 import Data.Int (Int64)
 
-data SshRole = SshRoleClient | SshRoleServer
+data SshRole
+  = SshRoleClient
+  | SshRoleServer
 
 data SshVersion = SshVersion
- { protocolVersion :: ByteString
- , softwareVersion :: ByteString
- , comments :: Maybe ByteString
- } deriving (Eq, Show)
+  { protocolVersion :: ByteString
+  , softwareVersion :: ByteString
+  , comments :: Maybe ByteString
+  } deriving (Eq, Show)
 
 data SshSettings = MkSshSettings
- { sshSettingsOnProtocolVersionExchange :: SshVersion -> IO ()
- , sshSettingsOnReceiveBanner :: ByteString -> IO ()
- , sshSettingsProtocolVersionExchangeSizeLimitBytes :: Int64
- }
+  { sshSettingsOnProtocolVersionExchange :: SshVersion -> IO ()
+  , sshSettingsOnReceiveBanner :: ByteString -> IO ()
+  , sshSettingsProtocolVersionExchangeSizeLimitBytes :: Int64
+  }

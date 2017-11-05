@@ -11,26 +11,27 @@
 -- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
-
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Network.Yassh.IOStreams
   ( runSshServer
-  )
-where
+  ) where
 
+import Data.ByteString (ByteString)
+import Development.Placeholders
+import Network.Socket (PortNumber)
+import qualified Network.Yassh as Yassh
 import System.IO.Streams (InputStream, OutputStream)
 import qualified System.IO.Streams as Streams
-import Data.ByteString (ByteString)
-import Network.Socket (PortNumber)
-import Development.Placeholders
-import qualified Network.Yassh as Yassh
 
 runSshServer :: PortNumber -> ((InputStream ByteString, OutputStream ByteString) -> IO ()) -> IO ()
-runSshServer port shellIO = Yassh.runSshServer port $ \(receive, send, sendErr) -> do
-  is <- Streams.makeInputStream receive
-  os <- Streams.makeOutputStream $ \maybeBytes -> case maybeBytes of
-    Just bytes -> send bytes
-    Nothing -> return ()
-  shellIO (is, os)
+runSshServer port shellIO =
+  Yassh.runSshServer port $ \(receive, send, sendErr) -> do
+    is <- Streams.makeInputStream receive
+    os <-
+      Streams.makeOutputStream $ \maybeBytes ->
+        case maybeBytes of
+          Just bytes -> send bytes
+          Nothing -> return ()
+    shellIO (is, os)

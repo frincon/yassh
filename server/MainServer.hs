@@ -11,14 +11,13 @@
 -- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
-
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-import Network.Yassh.IOStreams
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
-import System.IO (hSetBuffering, BufferMode(NoBuffering), stdout)
+import Network.Yassh.IOStreams
+import System.IO (BufferMode(NoBuffering), hSetBuffering, stdout)
 import System.IO.Streams (InputStream, OutputStream)
 import qualified System.IO.Streams as Streams
 
@@ -32,7 +31,7 @@ dummyShell (is, os) = do
   isLines <- Streams.lines is -- TODO This is not safe as can blow up the memory if there is no end of line
   loop (isLines, os)
   where
-    loop (is, os) =  do
+    loop (is, os) = do
       maybeLine <- Streams.read is
       case maybeLine of
         Just line -> do

@@ -11,7 +11,6 @@
 -- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
-
 {-# LANGUAGE OverloadedStrings #-}
 
 import Control.Monad.IO.Class (liftIO)
@@ -28,11 +27,8 @@ main :: IO ()
 main =
   hspec $ do
     describe "Network.Yassh.bannerLines" $ do
-      it "Returns nothing when the line start with SSH-" $ do
-        parseOnly bannerLines "SSH-PEpito" `shouldBe` Right ""
-      it "Does not consume the SSH- part" $ do
-        parse bannerLines "SSH-Pepito" `shouldSatisfy`
-          leavesUnconsumed "SSH-Pepito"
+      it "Returns nothing when the line start with SSH-" $ do parseOnly bannerLines "SSH-PEpito" `shouldBe` Right ""
+      it "Does not consume the SSH- part" $ do parse bannerLines "SSH-Pepito" `shouldSatisfy` leavesUnconsumed "SSH-Pepito"
       it "Consumes multiple lines" $ do
         parse bannerLines "Banner1\r\nBanner2\r\nSSH-Pepito" `shouldSatisfy`
           doneWithResultAndUnconsumed "Banner1\r\nBanner2\r\n" "SSH-Pepito"
@@ -46,60 +42,39 @@ main =
         liftIO $ receiveBanner is
         Streams.read is `shouldReturn` Just "SSH-Pepito"
       it "Can Continue" $ do
-        is <-
-          liftIO $ Streams.fromList ["Banner1\r\n", "Bann", "er2\r\nSSH-Pepito"]
+        is <- liftIO $ Streams.fromList ["Banner1\r\n", "Bann", "er2\r\nSSH-Pepito"]
         liftIO $ receiveBanner is
         Streams.read is `shouldReturn` Just "SSH-Pepito"
       it "Should fail if the stream is exhausted" $ do
-        is <-
-          liftIO $
-          Streams.fromList ["Banner1\r\n", "Bann", "er2\r\nOther Banner"]
+        is <- liftIO $ Streams.fromList ["Banner1\r\n", "Bann", "er2\r\nOther Banner"]
         receiveBanner is `shouldThrow` anyException -- TODO make it explicit
     describe "Network.Yassh.protocolVersionExchangeClient" $ do
       it "Should fail if the stream is bigger then protocolExchangeLimitBytes" $ do
         is <-
           liftIO $
-          Streams.fromByteString $
-          BC.append
-            (BC.replicate (fromIntegral $ protocolExchangeLimitBytes) 'a')
-            "\r\nSSH-Pepito"
+          Streams.fromByteString $ BC.append (BC.replicate (fromIntegral $ protocolExchangeLimitBytes) 'a') "\r\nSSH-Pepito"
         os <- liftIO $ Streams.makeOutputStream (\input -> return ())
         protocolVersionExchangeClient (is, os) `shouldThrow` anyException -- TODO make it explicit
       it "Should return the correct version without comments and wothout banner" $ do
         is <- liftIO $ Streams.fromByteString "SSH-2.0-test\r\n"
         os <- liftIO $ Streams.makeOutputStream (\input -> return ())
         protocolVersionExchangeClient (is, os) `shouldReturn`
-          SshVersion
-          {protocolVersion = "2.0", softwareVersion = "test", comments = Nothing}
+          SshVersion {protocolVersion = "2.0", softwareVersion = "test", comments = Nothing}
       it "Should return the correct version with comments and without banner" $ do
-        is <-
-          liftIO $ Streams.fromByteString "SSH-2.0-test  this is a comment \r\n"
+        is <- liftIO $ Streams.fromByteString "SSH-2.0-test  this is a comment \r\n"
         os <- liftIO $ Streams.makeOutputStream (\input -> return ())
         protocolVersionExchangeClient (is, os) `shouldReturn`
-          SshVersion
-          { protocolVersion = "2.0"
-          , softwareVersion = "test"
-          , comments = Just " this is a comment "
-          }
-      it
-        "Should return the correct version with empty comment and without banner" $ do
+          SshVersion {protocolVersion = "2.0", softwareVersion = "test", comments = Just " this is a comment "}
+      it "Should return the correct version with empty comment and without banner" $ do
         is <- liftIO $ Streams.fromByteString "SSH-2.0-test \r\n"
         os <- liftIO $ Streams.makeOutputStream (\input -> return ())
         protocolVersionExchangeClient (is, os) `shouldReturn`
-          SshVersion
-          {protocolVersion = "2.0", softwareVersion = "test", comments = Just ""}
+          SshVersion {protocolVersion = "2.0", softwareVersion = "test", comments = Just ""}
       it "Should return the correct version with comment and banner" $ do
-        is <-
-          liftIO $
-          Streams.fromByteString
-            "banner1\r\nbanner2\r\nSSH-2.0-test  this is a comment \r\n"
+        is <- liftIO $ Streams.fromByteString "banner1\r\nbanner2\r\nSSH-2.0-test  this is a comment \r\n"
         os <- liftIO $ Streams.makeOutputStream (\input -> return ())
         protocolVersionExchangeClient (is, os) `shouldReturn`
-          SshVersion
-          { protocolVersion = "2.0"
-          , softwareVersion = "test"
-          , comments = Just " this is a comment "
-          }
+          SshVersion {protocolVersion = "2.0", softwareVersion = "test", comments = Just " this is a comment "}
 
 leavesUnconsumed :: ByteString -> Result r -> Bool
 leavesUnconsumed expected (Done unconsummed _) = expected == unconsummed

@@ -11,20 +11,21 @@
 -- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
-
 {-# LANGUAGE OverloadedStrings #-}
 
 module Lib
-  ( -- testServer
+    -- testServer
+  (
   ) where
 
 import Network.Socket hiding (recv, send)
 import Network.Socket.ByteString (send)
-import Network.Yassh (supportedKexSet, newCookie, readPacket, readKexPacket, algorithmNegotiation)
+import Network.Yassh
+       (algorithmNegotiation, newCookie, readKexPacket, readPacket,
+        supportedKexSet)
 import System.IO
 import qualified System.IO.Streams as Streams
 import System.IO.Streams.Network (socketToStreams)
-
 -- testServer :: IO ()
 -- testServer = do
 --   putStrLn "Listening"
