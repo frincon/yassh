@@ -19,6 +19,7 @@ module Network.Yassh
   -- , receiveBanner
   ( protocolExchangeLimitBytes
   , runSshServer
+  , runSshClient
   , SshVersion(..)
   -- , protocolVersionExchangeClient
   -- , protocolVersionExchangeServer
@@ -28,6 +29,8 @@ module Network.Yassh
   , readPacket
   , readKexPacket
   , algorithmNegotiation
+  , SshClient
+  , SshClientContext
   -- , SshVersion(..)
   , Cookie
   ) where
@@ -35,7 +38,10 @@ module Network.Yassh
 import Control.Applicative ((<|>))
 import Control.Concurrent.Chan
 import Control.Monad (void, when)
+import Control.Monad.Catch (MonadMask)
 import Control.Monad.Free
+import Control.Monad.IO.Class (MonadIO, liftIO)
+import Control.Monad.Reader (ReaderT, runReaderT)
 import Data.Attoparsec.ByteString
        (Parser, anyWord8, manyTill, string, takeWhile1, word8)
 import Data.Attoparsec.Combinator (lookAhead)
@@ -55,7 +61,7 @@ import Data.Text.Encoding (encodeUtf8)
 import Data.Version (showVersion)
 import Data.Word8 (_hyphen, _space)
 import Development.Placeholders
-import Network.Simple.TCP (serve)
+import Network.Simple.TCP (connect, serve)
 import Network.Socket (PortNumber, SockAddr, Socket)
 import Network.Socket.ByteString (recv, sendAll)
 import Network.Yassh.Internal
@@ -71,13 +77,21 @@ import System.IO.Streams.Attoparsec.ByteString (parseFromStream)
 defaultServerSettings :: SshSettings
 defaultServerSettings =
   MkSshSettings
-  { sshSettingsOnProtocolVersionExchange = defaultServerOnProtocolVersionExchange
+  { sshSettingsOnProtocolVersionExchange = defaultOnProtocolVersionExchange
   , sshSettingsOnReceiveBanner = mempty -- no banner from clients
   , sshSettingsProtocolVersionExchangeSizeLimitBytes = defaultProtocolVersionExchangeSizeLimitBytes
   }
 
-defaultServerOnProtocolVersionExchange :: SshVersion -> IO ()
-defaultServerOnProtocolVersionExchange = print
+defaultClientSettings :: SshSettings
+defaultClientSettings =
+  MkSshSettings
+  { sshSettingsOnProtocolVersionExchange = defaultOnProtocolVersionExchange
+  , sshSettingsOnReceiveBanner = BS.putStr -- print banner to stdout
+  , sshSettingsProtocolVersionExchangeSizeLimitBytes = maxBound
+  }
+
+defaultOnProtocolVersionExchange :: SshVersion -> IO ()
+defaultOnProtocolVersionExchange = print
 
 defaultProtocolVersionExchangeSizeLimitBytes :: Int64
 defaultProtocolVersionExchangeSizeLimitBytes = 64 * 1024
@@ -93,16 +107,34 @@ data SshSession = SshSession
 
 type Shell = ((IO (Maybe ByteString), ByteString -> IO (), ByteString -> IO ()) -> IO ())
 
+data SshClientContext =
+  MkSshClientContext
+
+type SshClient = ReaderT SshClientContext
+
+-- TODO Check if wee can get rid of MonadMask
+runSshClient :: (MonadIO m, MonadMask m) => String -> SshClient m r -> m r
+runSshClient hostName program = connect hostName "22" (runSshClientConnection program defaultClientSettings)
+
 runSshServer :: PortNumber -> Shell -> IO ()
 runSshServer port shell = serve "*" (show port) (runSshServerConnection shell defaultServerSettings)
 
 -- TODO Shell should be part of the settings
+-- TODO merge those 2 in 1 function
 runSshServerConnection :: Shell -> SshSettings -> (Socket, SockAddr) -> IO ()
 runSshServerConnection shell settings (connectionSocket, sockAddr) = do
   (is, os) <- Streams.socketToStreams connectionSocket
   limitedInputStream <- Streams.takeBytes (sshSettingsProtocolVersionExchangeSizeLimitBytes settings) is
-  sshVersion <- runProtocolVersionExchange (limitedInputStream, os) SshRoleClient settings
+  sshVersion <- runProtocolVersionExchange (limitedInputStream, os) SshRoleServer settings
   sshSettingsOnProtocolVersionExchange settings sshVersion
+
+runSshClientConnection :: MonadIO m => SshClient m r -> SshSettings -> (Socket, SockAddr) -> m r
+runSshClientConnection program settings (connectionSocket, sockAddr) = do
+  (is, os) <- liftIO $ Streams.socketToStreams connectionSocket
+  limitedInputStream <- liftIO $ Streams.takeBytes (sshSettingsProtocolVersionExchangeSizeLimitBytes settings) is
+  sshVersion <- liftIO $ runProtocolVersionExchange (limitedInputStream, os) SshRoleClient settings
+  liftIO $ sshSettingsOnProtocolVersionExchange settings sshVersion
+  runReaderT program MkSshClientContext
 
 protocolTransportLayerGeneric = [1 .. 19]
 

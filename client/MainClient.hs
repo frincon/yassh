@@ -14,7 +14,18 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
 
+import Control.Monad.IO.Class (liftIO)
 import Development.Placeholders
+import Network.Yassh (SshClient, runSshClient)
+import System.Environment (getArgs)
+import System.IO (BufferMode(NoBuffering), hSetBuffering, stdout)
 
 main :: IO ()
-main = $notImplemented
+main = do
+  hSetBuffering stdout NoBuffering
+  args <- getArgs
+  run args
+  where
+    run :: [String] -> IO ()
+    run [] = putStrLn "worng arguments, at least 1"
+    run (hostName:xs) = runSshClient hostName $ liftIO $ putStrLn "Connection established"
