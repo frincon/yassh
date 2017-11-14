@@ -16,6 +16,10 @@
 
 module Network.Yassh.ProtocolVersionExchange
   ( runProtocolVersionExchange
+  -- TODO Those are for testing, refactor testing to not have to go to this
+  -- detailed functions
+  , bannerLines
+  , receiveBanner
   ) where
 
 import Network.Yassh.Internal
@@ -25,14 +29,12 @@ import Control.Applicative ((<|>))
 import Data.Word8 (_hyphen, _space)
 
 import Control.Concurrent.Async (concurrently)
-import Control.Monad (void, when)
 import Data.Attoparsec.ByteString
        (Parser, anyWord8, manyTill, string, takeWhile1, word8)
 import Data.Attoparsec.Combinator (lookAhead)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
-import Data.Maybe (fromMaybe)
 import Data.Version (showVersion)
 
 import Paths_yassh (version)

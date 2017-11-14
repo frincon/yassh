@@ -16,10 +16,23 @@
 
 import Control.Monad.IO.Class (liftIO)
 import Development.Placeholders
-import Network.Yassh (SshClient, runSshClient)
+import Network.Yassh (SshAction, runSshClient)
 import System.Environment (getArgs)
 import System.IO (BufferMode(NoBuffering), hSetBuffering, stdout)
+import Control.Monad.Cont
+import Control.Monad.Cont.Class
 
+main = do
+  hSetBuffering stdout NoBuffering
+  flip runContT return $ do
+    lift $ putStrLn "Dame un valor"
+    --valor <- lift getLine
+    k <- callCC $ \k -> let r = k r in r >> return r
+    lift $ putStrLn "beta"          -- k
+    lift $ putStrLn "gamma"         -- j
+    k
+
+{-
 main :: IO ()
 main = do
   hSetBuffering stdout NoBuffering
@@ -27,5 +40,7 @@ main = do
   run args
   where
     run :: [String] -> IO ()
-    run [] = putStrLn "worng arguments, at least 1"
-    run (hostName:xs) = runSshClient hostName $ liftIO $ putStrLn "Connection established"
+    run [] = putStrLn "worng arguments, hostname only"
+    run [hostName] = runSshClient hostName $ liftIO $ putStrLn "Connection established"
+    run _ = putStrLn "worng arguments, hostname only"
+-}

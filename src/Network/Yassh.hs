@@ -13,6 +13,7 @@
 -- limitations under the License.
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Network.Yassh
   -- ( bannerLines
@@ -20,52 +21,48 @@ module Network.Yassh
   ( protocolExchangeLimitBytes
   , runSshServer
   , runSshClient
+  , defaultServerSettings
+  , defaultClientSettings
   , SshVersion(..)
   -- , protocolVersionExchangeClient
   -- , protocolVersionExchangeServer
-  , sendKexInitPacket
-  , supportedKexSet
-  , newCookie
-  , readPacket
-  , readKexPacket
-  , algorithmNegotiation
-  , SshClient
+  , SshAction
+  , SshContext
   , SshClientContext
-  -- , SshVersion(..)
-  , Cookie
   ) where
 
 import Control.Applicative ((<|>))
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.Chan
 import Control.Monad (void, when)
 import Control.Monad.Catch (MonadMask)
 import Control.Monad.Free
 import Control.Monad.IO.Class (MonadIO, liftIO)
-import Control.Monad.Reader (ReaderT, runReaderT)
+import Control.Monad.Reader (ReaderT, ask, asks, local, runReaderT)
 import Data.Attoparsec.ByteString
        (Parser, anyWord8, manyTill, string, takeWhile1, word8)
 import Data.Attoparsec.Combinator (lookAhead)
 import Data.Binary.Get
        (Decoder(..), Get, getByteString, getInt32be, getWord32be,
-        getWord8, runGet, runGetIncremental)
+        getWord8, runGet, runGetIncremental, getRemainingLazyByteString)
 import Data.Binary.Put
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as LBS
 import Data.Int
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, fromJust)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
+import Data.Time.TimeSpan (TimeSpan, minutes, toMicroseconds)
 import Data.Version (showVersion)
-import Data.Word8 (_hyphen, _space)
+import Data.Word8 (Word8, _hyphen, _space)
 import Development.Placeholders
 import Network.Simple.TCP (connect, serve)
 import Network.Socket (PortNumber, SockAddr, Socket)
 import Network.Socket.ByteString (recv, sendAll)
 import Network.Yassh.Internal
-       (SshRole(..), SshSettings(..), SshVersion(..))
 import Network.Yassh.ProtocolVersionExchange
        (runProtocolVersionExchange)
 import Paths_yassh (version)
@@ -80,6 +77,7 @@ defaultServerSettings =
   { sshSettingsOnProtocolVersionExchange = defaultOnProtocolVersionExchange
   , sshSettingsOnReceiveBanner = mempty -- no banner from clients
   , sshSettingsProtocolVersionExchangeSizeLimitBytes = defaultProtocolVersionExchangeSizeLimitBytes
+  , sshSettingsIgnoreInterval = defaultIgnoreInterval
   }
 
 defaultClientSettings :: SshSettings
@@ -88,6 +86,7 @@ defaultClientSettings =
   { sshSettingsOnProtocolVersionExchange = defaultOnProtocolVersionExchange
   , sshSettingsOnReceiveBanner = BS.putStr -- print banner to stdout
   , sshSettingsProtocolVersionExchangeSizeLimitBytes = maxBound
+  , sshSettingsIgnoreInterval = defaultIgnoreInterval
   }
 
 defaultOnProtocolVersionExchange :: SshVersion -> IO ()
@@ -96,54 +95,189 @@ defaultOnProtocolVersionExchange = print
 defaultProtocolVersionExchangeSizeLimitBytes :: Int64
 defaultProtocolVersionExchangeSizeLimitBytes = 64 * 1024
 
-data SshPacket =
-  SshPacket String
-
-data SshSession = SshSession
-  { inputStream :: InputStream ByteString
-  , outputSrteam :: OutputStream ByteString
-  , role :: SshRole
-  }
+defaultIgnoreInterval :: TimeSpan
+defaultIgnoreInterval = minutes 1
 
 type Shell = ((IO (Maybe ByteString), ByteString -> IO (), ByteString -> IO ()) -> IO ())
 
-data SshClientContext =
-  MkSshClientContext
-
-type SshClient = ReaderT SshClientContext
-
--- TODO Check if wee can get rid of MonadMask
-runSshClient :: (MonadIO m, MonadMask m) => String -> SshClient m r -> m r
+-- TODO Check if we can get rid of MonadMask
+runSshClient :: (MonadIO m, MonadMask m) => String -> SshAction SshClientContext m r -> m r
 runSshClient hostName program = connect hostName "22" (runSshClientConnection program defaultClientSettings)
 
 runSshServer :: PortNumber -> Shell -> IO ()
 runSshServer port shell = serve "*" (show port) (runSshServerConnection shell defaultServerSettings)
 
 -- TODO Shell should be part of the settings
--- TODO merge those 2 in 1 function
-runSshServerConnection :: Shell -> SshSettings -> (Socket, SockAddr) -> IO ()
+runSshServerConnection :: MonadIO m => Shell -> SshSettings -> (Socket, SockAddr) -> m ()
 runSshServerConnection shell settings (connectionSocket, sockAddr) = do
-  (is, os) <- Streams.socketToStreams connectionSocket
-  limitedInputStream <- Streams.takeBytes (sshSettingsProtocolVersionExchangeSizeLimitBytes settings) is
-  sshVersion <- runProtocolVersionExchange (limitedInputStream, os) SshRoleServer settings
-  sshSettingsOnProtocolVersionExchange settings sshVersion
+  context <- sshContext connectionSocket MkSshServerContext SshRoleServer settings
+  runReaderT initializeConnection context
+  return ()
 
-runSshClientConnection :: MonadIO m => SshClient m r -> SshSettings -> (Socket, SockAddr) -> m r
+runSshClientConnection :: MonadIO m => SshAction SshClientContext m r -> SshSettings -> (Socket, SockAddr) -> m r
 runSshClientConnection program settings (connectionSocket, sockAddr) = do
-  (is, os) <- liftIO $ Streams.socketToStreams connectionSocket
-  limitedInputStream <- liftIO $ Streams.takeBytes (sshSettingsProtocolVersionExchangeSizeLimitBytes settings) is
-  sshVersion <- liftIO $ runProtocolVersionExchange (limitedInputStream, os) SshRoleClient settings
-  liftIO $ sshSettingsOnProtocolVersionExchange settings sshVersion
-  runReaderT program MkSshClientContext
+  context <- sshContext connectionSocket MkSshClientContext SshRoleClient settings
+  runReaderT (protocolExchange >> program) context
 
+initializeConnection :: MonadIO m => ReaderT (SshContext t) m ()
+initializeConnection = do
+  version <- protocolExchange
+  local (\c -> c {sshContextPeerVersion = Just version}) $ do
+    streams <- asks sshContextStreams
+    packetStreams <- liftIO $ createPacketStreams streams
+    local (\c -> c {sshContextPacketStreams = Just packetStreams }) sshMsgIgnoreHandler
+  return ()
+
+protocolExchange :: MonadIO m => ReaderT (SshContext t) m SshVersion
+protocolExchange = do
+  (is, os) <- asks sshContextStreams
+  settings <- asks sshContextSettings
+  role <- asks sshContextRole
+  limitedInputStream <- liftIO $ Streams.takeBytes (sshSettingsProtocolVersionExchangeSizeLimitBytes settings) is
+  sshVersion <- liftIO $ runProtocolVersionExchange (limitedInputStream, os) role settings
+  liftIO $ sshSettingsOnProtocolVersionExchange settings sshVersion
+  return sshVersion
+
+sshContext :: MonadIO m => Socket -> t -> SshRole -> SshSettings -> m (SshContext t)
+sshContext socket cons role settings = do
+  streams <- liftIO $ Streams.socketToStreams socket
+  return
+    MkSshContext
+    { sshContextSpecificContext = cons
+    , sshContextRole = role
+    , sshContextStreams = streams
+    , sshContextSettings = settings
+    , sshContextPeerVersion = Nothing
+    }
+
+-- until here is ok TODO Refactor from here
+sendPacket :: SshPacket -> ReaderT (SshContext t) m ()
+sendPacket = $notImplemented
+
+receivePacket :: MonadIO m => [Word8] -> (SshRawPacket -> ReaderT (SshContext t) m r) -> ReaderT (SshContext t) m r
+receivePacket expected action = do
+  (is, _) <- asks (fromJust . sshContextPacketStreams)
+  maybePacket <- liftIO $ Streams.read is
+  case maybePacket of
+    Nothing -> fail "No more data" -- TODO Is this correct?
+    Just packet@(SshRawPacket msgId _) ->
+      if msgId `elem` expected
+        then action packet
+        else do
+          liftIO $ Streams.unRead packet is
+          receivePacket expected action
+
+c_SSH_MSG_KEXINIT = 20 :: Word8
+
+c_SSH_MSG_IGNORE = 2 :: Word8
+
+sshMsgIgnoreHandler :: MonadIO m => ReaderT (SshContext t) m ()
+sshMsgIgnoreHandler = do
+  liftIO $ putStrLn "Receiving ignore packets"
+  receivePacket [c_SSH_MSG_IGNORE] $ \packet -> do
+    liftIO $ putStrLn "Ignore packet received"
+    sshMsgIgnoreHandler
+  liftIO $ putStrLn "Finish handler"
+
+sshMsgIgnoreSender :: MonadIO m => ReaderT (SshContext t) m ()
+sshMsgIgnoreSender = do
+  interval <- asks (sshSettingsIgnoreInterval . sshContextSettings)
+  runSshMsgIngnoreSender interval
+  where
+    runSshMsgIngnoreSender :: MonadIO m => TimeSpan -> ReaderT (SshContext t) m ()
+    runSshMsgIngnoreSender interval = do
+      liftIO $ threadDelay (round $ toMicroseconds interval) -- TODO The interval should be random
+      sendPacket $ SshPacket c_SSH_MSG_IGNORE [SshString "some data to be random"] -- TODO This should be random
+      runSshMsgIngnoreSender interval
+
+createPacketStreams :: (InputStream ByteString, OutputStream ByteString) -> IO (InputStream SshRawPacket, OutputStream SshPacket)
+createPacketStreams (is, os) = do
+    newIs <- createPacketInputStream is
+    newOs <- createPacketOutputStream os
+    return (newIs, newOs)
+  where
+    createPacketInputStream is = Streams.makeInputStream $ readPacket is readRawPacket
+    createPacketOutputStream :: OutputStream ByteString -> IO (OutputStream SshPacket)
+    createPacketOutputStream os = Streams.makeOutputStream $ \case -- TODO use fmap
+      Nothing -> Streams.write Nothing os
+      Just packet -> Streams.write (Just $ toSshPacket packet) os
+
+readPacket :: InputStream ByteString -> Get a -> IO (Maybe a)
+readPacket is reader = go decoder
+  where
+    decoder =
+      runGetIncremental $ do
+        payload <- readSshPacketPayload
+        return $ runGet reader $ LBS.fromStrict payload
+    go (Partial continue) = do
+      maybeBuffer <- Streams.read is
+      go $ continue maybeBuffer
+    go (Done leftover _ result) = do
+      Streams.unRead leftover is
+      return $ Just result
+    go (Fail leftover _ msg) = do
+      Streams.unRead leftover is
+      return Nothing
+
+readSshPacketPayload :: Get ByteString
+readSshPacketPayload = do
+  packetLength <- fmap fromIntegral getWord32be
+  paddingLength <- fmap fromIntegral getWord8
+  payload <- getByteString $ packetLength - paddingLength - 1 - 1
+  getByteString paddingLength
+  return payload
+
+readRawPacket :: Get SshRawPacket
+readRawPacket = SshRawPacket
+    <$> getWord8
+    <*> fmap (BS.concat . LBS.toChunks) getRemainingLazyByteString
+
+
+toSshPacket :: SshPacket -> BS.ByteString
+toSshPacket packet = toSshPacket' $ runPut (putPacket packet)
+  where
+    putPacket :: SshPacket -> Put
+    putPacket (SshPacket msgId otherData) = do
+      putWord8 msgId
+      mapM_ dataToPut otherData
+    dataToPut :: SshData -> Put
+    dataToPut (SshString payload) = do
+      putWord32be $ fromIntegral $ BS.length payload
+      putByteString payload
+    dataToPut (SshBoolean True) = putWord8 1
+    dataToPut (SshBoolean False) = putWord8 0
+
+toSshPacket' :: LBS.ByteString -> BS.ByteString
+toSshPacket' payload =
+  BS.concat $
+  LBS.toChunks $
+  LBS.concat -- TODO Not very efficient
+    [ runPut $ putWord32be $ fromIntegral paketLength
+    , runPut $ putWord8 $ fromIntegral paddingLength
+    , payload
+    , LBS.replicate (fromIntegral paddingLength) 0 -- TODO Use Random
+    ]
+  where
+    payloadLength :: Int64
+    payloadLength = LBS.length payload
+    paketLengthFieldLength :: Int64
+    paketLengthFieldLength = 4 :: Int64
+    paddingLengthFieldLength :: Int64
+    paddingLengthFieldLength = 1 :: Int64
+    paddingLength :: Int64
+    paddingLength = 8 - ((payloadLength + paketLengthFieldLength + paddingLengthFieldLength) `mod` 8)
+    paketLength :: Int64
+    paketLength = paddingLengthFieldLength + payloadLength + paddingLength
+
+-- Until here is not checked
 protocolTransportLayerGeneric = [1 .. 19]
 
 protocolAlgorithmNegotiation = [20 .. 29]
 
 protocolKeyExchangeSpecific = [30 .. 49]
 
-c_SSH_MSG_KEXINIT = 20
 
+{-
 data SshProtocol next
   = RecvPacket [Int]
                (SshPacket -> next)
@@ -164,7 +298,7 @@ sendPacket packet = liftF (SendPacket packet ())
 
 end :: Free SshProtocol ()
 end = liftF End
-
+-}
 -- algorithmNegotiation kexSet = do
 --   sendPacket (SshPacket "kexInit")
 --   kexInit <- recvPacket [c_SSH_MSG_KEXINIT]
@@ -288,6 +422,7 @@ supportedKexSet =
   , languagesServerToClient = supportedLanguages
   }
 
+{-
 nameList :: Named a => [a] -> Put
 nameList list = do
   let listAsByteString = BS.intercalate "," (fmap nameAsBytestring list)
@@ -331,22 +466,6 @@ sendKexInitPacket kexSet (MkCookie cookieBytes) = Streams.write $ Just $ toSshPa
         putBoolean False
         putInt32be 0
 
-readPacket :: InputStream ByteString -> Get a -> IO a
-readPacket is reader = go decoder
-  where
-    decoder =
-      runGetIncremental $ do
-        payload <- readSshPacketPayload
-        return $ runGet reader $ LBS.fromStrict payload
-    go (Partial continue) = do
-      maybeBuffer <- Streams.read is
-      go $ continue maybeBuffer
-    go (Done leftover _ result) = do
-      Streams.unRead leftover is
-      return result
-    go (Fail leftover _ msg) = do
-      Streams.unRead leftover is
-      fail msg
 
 readPacketPayload :: InputStream ByteString -> IO ByteString
 readPacketPayload is = readFromInputStream is readSshPacketPayload
@@ -368,13 +487,6 @@ readFromInputStream is reader = go decoder
 newtype Payload =
   Payload ByteString
 
-readSshPacketPayload :: Get ByteString
-readSshPacketPayload = do
-  packetLength <- fmap fromIntegral getWord32be
-  paddingLength <- fmap fromIntegral getWord8
-  payload <- getByteString $ packetLength - paddingLength - 1 - 1
-  getByteString paddingLength
-  return payload
 
 readKexPacket :: Get (Cookie, KexSet, Bool)
 readKexPacket = do
@@ -393,25 +505,4 @@ readKexPacket = do
   firstKexPacketFollows <- getBoolean
   getInt32be
   return (cookie, kexSet, firstKexPacketFollows)
-
-toSshPacket :: LBS.ByteString -> BS.ByteString
-toSshPacket payload =
-  BS.concat $
-  LBS.toChunks $
-  LBS.concat -- TODO Not very efficient
-    [ runPut $ putWord32be $ fromIntegral paketLength
-    , runPut $ putWord8 $ fromIntegral paddingLength
-    , payload
-    , LBS.replicate (fromIntegral paddingLength) 0 -- TODO Use Random
-    ]
-  where
-    payloadLength :: Int64
-    payloadLength = LBS.length payload
-    paketLengthFieldLength :: Int64
-    paketLengthFieldLength = 4 :: Int64
-    paddingLengthFieldLength :: Int64
-    paddingLengthFieldLength = 1 :: Int64
-    paddingLength :: Int64
-    paddingLength = 8 - ((payloadLength + paketLengthFieldLength + paddingLengthFieldLength) `mod` 8)
-    paketLength :: Int64
-    paketLength = paddingLengthFieldLength + payloadLength + paddingLength
+-}

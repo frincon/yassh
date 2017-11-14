@@ -15,10 +15,21 @@ module Network.Yassh.Internal
   ( SshRole(..)
   , SshVersion(..)
   , SshSettings(..)
+  , SshContext(..)
+  , SshClientContext(..)
+  , SshServerContext(..)
+  , SshAction(..)
+  , SshPacket(..)
+  , SshRawPacket(..)
+  , SshData(..)
   ) where
 
+import Control.Monad.Reader (ReaderT)
 import Data.ByteString (ByteString)
+import Data.Word (Word8)
 import Data.Int (Int64)
+import Data.Time.TimeSpan (TimeSpan)
+import System.IO.Streams (InputStream, OutputStream)
 
 data SshRole
   = SshRoleClient
@@ -34,4 +45,34 @@ data SshSettings = MkSshSettings
   { sshSettingsOnProtocolVersionExchange :: SshVersion -> IO ()
   , sshSettingsOnReceiveBanner :: ByteString -> IO ()
   , sshSettingsProtocolVersionExchangeSizeLimitBytes :: Int64
+  , sshSettingsIgnoreInterval :: TimeSpan
   }
+
+data SshContext t = MkSshContext
+  { sshContextSpecificContext :: t
+  , sshContextRole :: SshRole
+  , sshContextStreams :: (InputStream ByteString, OutputStream ByteString)
+  , sshContextSettings :: SshSettings
+  , sshContextPeerVersion :: Maybe SshVersion
+  , sshContextPacketStreams :: Maybe (InputStream SshRawPacket, OutputStream SshPacket)
+  }
+
+data SshClientContext =
+  MkSshClientContext
+
+data SshServerContext =
+  MkSshServerContext
+
+type SshAction t = ReaderT (SshContext t)
+
+data SshPacket =
+  SshPacket Word8
+            [SshData]
+
+data SshRawPacket =
+  SshRawPacket Word8
+               ByteString
+
+data SshData
+  = SshString ByteString
+  | SshBoolean Bool
