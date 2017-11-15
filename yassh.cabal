@@ -81,7 +81,6 @@ test-suite yassh-test
                      , timespan
                      -- Until here the same of lib
                      , hspec
-                     , transformers-free
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   default-language:    Haskell2010
 
