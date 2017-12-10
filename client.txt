@@ -1,0 +1,89 @@
+Received: (MkCookie "\157&s\215\238\227\173My\184J{r:\157\167",
+KexSet {kexAlgorithms = [
+  KexAlgorithm {kexAlgorithmName = "curve25519-sha256"},
+  KexAlgorithm {kexAlgorithmName = "curve25519-sha256@libssh.org"},
+  KexAlgorithm {kexAlgorithmName = "ecdh-sha2-nistp256"},
+  KexAlgorithm {kexAlgorithmName = "ecdh-sha2-nistp384"},
+  KexAlgorithm {kexAlgorithmName = "ecdh-sha2-nistp521"},
+  KexAlgorithm {kexAlgorithmName = "diffie-hellman-group-exchange-sha256"},
+  KexAlgorithm {kexAlgorithmName = "diffie-hellman-group16-sha512"},
+  KexAlgorithm {kexAlgorithmName = "diffie-hellman-group18-sha512"},
+  KexAlgorithm {kexAlgorithmName = "diffie-hellman-group-exchange-sha1"},
+  KexAlgorithm {kexAlgorithmName = "diffie-hellman-group14-sha256"},
+  KexAlgorithm {kexAlgorithmName = "diffie-hellman-group14-sha1"},
+  KexAlgorithm {kexAlgorithmName = "ext-info-c"}
+],
+serverHostKeyAlgorithms = [
+  HostKeyAlgorithm {hostKeyAlgorithmName = "ecdsa-sha2-nistp256-cert-v01@openssh.com"},
+  HostKeyAlgorithm {hostKeyAlgorithmName = "ecdsa-sha2-nistp384-cert-v01@openssh.com"},
+  HostKeyAlgorithm {hostKeyAlgorithmName = "ecdsa-sha2-nistp521-cert-v01@openssh.com"},
+  HostKeyAlgorithm {hostKeyAlgorithmName = "ssh-ed25519-cert-v01@openssh.com"},
+  HostKeyAlgorithm {hostKeyAlgorithmName = "ssh-rsa-cert-v01@openssh.com"},
+  HostKeyAlgorithm {hostKeyAlgorithmName = "ecdsa-sha2-nistp256"},
+  HostKeyAlgorithm {hostKeyAlgorithmName = "ecdsa-sha2-nistp384"},
+  HostKeyAlgorithm {hostKeyAlgorithmName = "ecdsa-sha2-nistp521"},
+  HostKeyAlgorithm {hostKeyAlgorithmName = "ssh-ed25519"},
+  HostKeyAlgorithm {hostKeyAlgorithmName = "rsa-sha2-512"},
+  HostKeyAlgorithm {hostKeyAlgorithmName = "rsa-sha2-256"},
+  HostKeyAlgorithm {hostKeyAlgorithmName = "ssh-rsa"}
+],
+encryptionAlgorithmsClientToServer = [
+  EncryptionAlgorithm {encryptionAlgorithmName = "chacha20-poly1305@openssh.com"},
+  EncryptionAlgorithm {encryptionAlgorithmName = "aes128-ctr"},
+  EncryptionAlgorithm {encryptionAlgorithmName = "aes192-ctr"},
+  EncryptionAlgorithm {encryptionAlgorithmName = "aes256-ctr"},
+  EncryptionAlgorithm {encryptionAlgorithmName = "aes128-gcm@openssh.com"},
+  EncryptionAlgorithm {encryptionAlgorithmName = "aes256-gcm@openssh.com"},
+  EncryptionAlgorithm {encryptionAlgorithmName = "aes128-cbc"},
+  EncryptionAlgorithm {encryptionAlgorithmName = "aes192-cbc"},
+  EncryptionAlgorithm {encryptionAlgorithmName = "aes256-cbc"}
+],
+encryptionAlgorithmsServerToClient = [
+  EncryptionAlgorithm {encryptionAlgorithmName = "chacha20-poly1305@openssh.com"},
+  EncryptionAlgorithm {encryptionAlgorithmName = "aes128-ctr"},
+  EncryptionAlgorithm {encryptionAlgorithmName = "aes192-ctr"},
+  EncryptionAlgorithm {encryptionAlgorithmName = "aes256-ctr"},
+  EncryptionAlgorithm {encryptionAlgorithmName = "aes128-gcm@openssh.com"},
+  EncryptionAlgorithm {encryptionAlgorithmName = "aes256-gcm@openssh.com"},
+  EncryptionAlgorithm {encryptionAlgorithmName = "aes128-cbc"},
+  EncryptionAlgorithm {encryptionAlgorithmName = "aes192-cbc"},
+  EncryptionAlgorithm {encryptionAlgorithmName = "aes256-cbc"}
+],
+macAlgorithmsClientToServer = [
+  MacAlgorithm {macAlgorithmName = "umac-64-etm@openssh.com"},
+  MacAlgorithm {macAlgorithmName = "umac-128-etm@openssh.com"},
+  MacAlgorithm {macAlgorithmName = "hmac-sha2-256-etm@openssh.com"},
+  MacAlgorithm {macAlgorithmName = "hmac-sha2-512-etm@openssh.com"},
+  MacAlgorithm {macAlgorithmName = "hmac-sha1-etm@openssh.com"},
+  MacAlgorithm {macAlgorithmName = "umac-64@openssh.com"},
+  MacAlgorithm {macAlgorithmName = "umac-128@openssh.com"},
+  MacAlgorithm {macAlgorithmName = "hmac-sha2-256"},
+  MacAlgorithm {macAlgorithmName = "hmac-sha2-512"},
+  MacAlgorithm {macAlgorithmName = "hmac-sha1"}
+],
+macAlgorithmsServerToClient = [
+  MacAlgorithm {macAlgorithmName = "umac-64-etm@openssh.com"},
+  MacAlgorithm {macAlgorithmName = "umac-128-etm@openssh.com"},
+  MacAlgorithm {macAlgorithmName = "hmac-sha2-256-etm@openssh.com"},
+  MacAlgorithm {macAlgorithmName = "hmac-sha2-512-etm@openssh.com"},
+  MacAlgorithm {macAlgorithmName = "hmac-sha1-etm@openssh.com"},
+  MacAlgorithm {macAlgorithmName = "umac-64@openssh.com"},
+  MacAlgorithm {macAlgorithmName = "umac-128@openssh.com"},
+  MacAlgorithm {macAlgorithmName = "hmac-sha2-256"},
+  MacAlgorithm {macAlgorithmName = "hmac-sha2-512"},
+  MacAlgorithm {macAlgorithmName = "hmac-sha1"}
+],
+compressionAlgorithmsClientToServer = [
+  CompressionAlgorithm {compressionAlgorithmName = "none"},
+  CompressionAlgorithm {compressionAlgorithmName = "zlib@openssh.com"},
+  CompressionAlgorithm {compressionAlgorithmName = "zlib"}
+],
+compressionAlgorithmsServerToClient = [
+  CompressionAlgorithm {compressionAlgorithmName = "none"},
+  CompressionAlgorithm {compressionAlgorithmName = "zlib@openssh.com"},
+  CompressionAlgorithm {compressionAlgorithmName = "zlib"}
+],
+languagesClientToServer = [],
+languagesServerToClient = []},
+False
+)

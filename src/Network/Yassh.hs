@@ -28,12 +28,13 @@ module Network.Yassh
   -- , protocolVersionExchangeServer
   , SshAction
   , SshContext
-  , SshClientContext
   ) where
 
 import Control.Applicative ((<|>))
 import Control.Concurrent (threadDelay)
+import Control.Concurrent.Async (async, wait)
 import Control.Concurrent.Chan
+import Control.Exception (SomeException, catch)
 import Control.Monad (void, when)
 import Control.Monad.Catch (MonadMask)
 import Control.Monad.Free
@@ -43,15 +44,16 @@ import Data.Attoparsec.ByteString
        (Parser, anyWord8, manyTill, string, takeWhile1, word8)
 import Data.Attoparsec.Combinator (lookAhead)
 import Data.Binary.Get
-       (Decoder(..), Get, getByteString, getInt32be, getWord32be,
-        getWord8, runGet, runGetIncremental, getRemainingLazyByteString)
+       (Decoder(..), Get, getByteString, getInt32be,
+        getRemainingLazyByteString, getWord32be, getWord8, runGet,
+        runGetIncremental)
 import Data.Binary.Put
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as LBS
 import Data.Int
-import Data.Maybe (fromMaybe, fromJust)
+import Data.Maybe (fromJust, fromMaybe, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
@@ -63,6 +65,7 @@ import Network.Simple.TCP (connect, serve)
 import Network.Socket (PortNumber, SockAddr, Socket)
 import Network.Socket.ByteString (recv, sendAll)
 import Network.Yassh.Internal
+import Network.Yassh.KeyExchange (runKeyExchange)
 import Network.Yassh.ProtocolVersionExchange
        (runProtocolVersionExchange)
 import Paths_yassh (version)
@@ -101,90 +104,86 @@ defaultIgnoreInterval = minutes 1
 type Shell = ((IO (Maybe ByteString), ByteString -> IO (), ByteString -> IO ()) -> IO ())
 
 -- TODO Check if we can get rid of MonadMask
-runSshClient :: (MonadIO m, MonadMask m) => String -> SshAction SshClientContext m r -> m r
+runSshClient :: (MonadIO m, MonadMask m) => String -> SshAction m r -> m r
 runSshClient hostName program = connect hostName "22" (runSshClientConnection program defaultClientSettings)
 
 runSshServer :: PortNumber -> Shell -> IO ()
-runSshServer port shell = serve "*" (show port) (runSshServerConnection shell defaultServerSettings)
+runSshServer port shell = serve "*" (show port) (runSecure . runSshServerConnection shell defaultServerSettings)
+
+runSecure :: IO () -> IO ()
+runSecure program = catch program (\e -> print (e :: SomeException))
 
 -- TODO Shell should be part of the settings
 runSshServerConnection :: MonadIO m => Shell -> SshSettings -> (Socket, SockAddr) -> m ()
 runSshServerConnection shell settings (connectionSocket, sockAddr) = do
-  context <- sshContext connectionSocket MkSshServerContext SshRoleServer settings
-  runReaderT initializeConnection context
+  context <- initializeConnection settings SshRoleServer connectionSocket
+  -- TODO Run the shell
   return ()
 
-runSshClientConnection :: MonadIO m => SshAction SshClientContext m r -> SshSettings -> (Socket, SockAddr) -> m r
+runSshClientConnection :: MonadIO m => SshAction m r -> SshSettings -> (Socket, SockAddr) -> m r
 runSshClientConnection program settings (connectionSocket, sockAddr) = do
-  context <- sshContext connectionSocket MkSshClientContext SshRoleClient settings
-  runReaderT (protocolExchange >> program) context
+  context <- initializeConnection settings SshRoleClient connectionSocket
+  runReaderT program context
 
-initializeConnection :: MonadIO m => ReaderT (SshContext t) m ()
-initializeConnection = do
-  version <- protocolExchange
-  local (\c -> c {sshContextPeerVersion = Just version}) $ do
-    streams <- asks sshContextStreams
-    packetStreams <- liftIO $ createPacketStreams streams
-    local (\c -> c {sshContextPacketStreams = Just packetStreams }) sshMsgIgnoreHandler
-  return ()
+initializeConnection :: MonadIO m => SshSettings -> SshRole -> Socket -> m SshContext
+initializeConnection settings role socket = do
+  streams <- liftIO $ Streams.socketToStreams socket
+  version <- protocolExchange streams settings role
+  packetStreams <- liftIO $ createPacketStreams streams
+  let context = MkSshContext role streams settings version packetStreams
+  runReaderT runFirstKeyExchange context
 
-protocolExchange :: MonadIO m => ReaderT (SshContext t) m SshVersion
-protocolExchange = do
-  (is, os) <- asks sshContextStreams
-  settings <- asks sshContextSettings
-  role <- asks sshContextRole
+protocolExchange :: MonadIO m => (InputStream ByteString, OutputStream ByteString) -> SshSettings -> SshRole -> m SshVersion
+protocolExchange (is, os) settings role = do
   limitedInputStream <- liftIO $ Streams.takeBytes (sshSettingsProtocolVersionExchangeSizeLimitBytes settings) is
   sshVersion <- liftIO $ runProtocolVersionExchange (limitedInputStream, os) role settings
   liftIO $ sshSettingsOnProtocolVersionExchange settings sshVersion
   return sshVersion
 
-sshContext :: MonadIO m => Socket -> t -> SshRole -> SshSettings -> m (SshContext t)
-sshContext socket cons role settings = do
-  streams <- liftIO $ Streams.socketToStreams socket
-  return
-    MkSshContext
-    { sshContextSpecificContext = cons
-    , sshContextRole = role
-    , sshContextStreams = streams
-    , sshContextSettings = settings
-    , sshContextPeerVersion = Nothing
-    }
-
 -- until here is ok TODO Refactor from here
-sendPacket :: SshPacket -> ReaderT (SshContext t) m ()
-sendPacket = $notImplemented
+runFirstKeyExchange :: MonadIO m => ReaderT SshContext m SshContext
+runFirstKeyExchange = do
+  (is, os) <- asks sshContextPacketStreams
+  role <- asks sshContextRole
+  result <- liftIO $ runKeyExchange role (receivePacket is) (\p -> (putStrLn "Sending packet" >> (Streams.writeTo os $ Just p)))
+  ask -- TODO Make another context with the keys
+  where
+    receivePacket :: InputStream SshRawPacket -> [Word8] -> IO SshRawPacket
+    receivePacket is accepted = do
+      maybeSshRawPacket <- Streams.read is
+      case maybeSshRawPacket of
+        Nothing -> fail "Connection close while doing the first key exchange"
+        Just sshRawPacket@(SshRawPacket msg payload) -> do
+          putStrLn $ "Msg received: " ++ (show msg)
+          if msg `elem` accepted
+            then return sshRawPacket
+            else do
+              processOtherPacket sshRawPacket
+              receivePacket is accepted
+    processOtherPacket paket = $notImplemented
 
-receivePacket :: MonadIO m => [Word8] -> (SshRawPacket -> ReaderT (SshContext t) m r) -> ReaderT (SshContext t) m r
-receivePacket expected action = do
-  (is, _) <- asks (fromJust . sshContextPacketStreams)
-  maybePacket <- liftIO $ Streams.read is
-  case maybePacket of
-    Nothing -> fail "No more data" -- TODO Is this correct?
-    Just packet@(SshRawPacket msgId _) ->
-      if msgId `elem` expected
-        then action packet
-        else do
-          liftIO $ Streams.unRead packet is
-          receivePacket expected action
+sendPacket :: MonadIO m => SshPacket -> ReaderT SshContext m ()
+sendPacket packet = do
+  (_, os) <- asks sshContextPacketStreams
+  liftIO $ Streams.write (Just packet) os
+  return ()
 
-c_SSH_MSG_KEXINIT = 20 :: Word8
+receivePacket :: MonadIO m => [Word8] -> ReaderT SshContext m SshRawPacket
+receivePacket = $notImplemented
 
-c_SSH_MSG_IGNORE = 2 :: Word8
-
-sshMsgIgnoreHandler :: MonadIO m => ReaderT (SshContext t) m ()
+sshMsgIgnoreHandler :: MonadIO m => ReaderT SshContext m ()
 sshMsgIgnoreHandler = do
-  liftIO $ putStrLn "Receiving ignore packets"
-  receivePacket [c_SSH_MSG_IGNORE] $ \packet -> do
-    liftIO $ putStrLn "Ignore packet received"
-    sshMsgIgnoreHandler
-  liftIO $ putStrLn "Finish handler"
+  liftIO $ putStrLn "Prepared to receive an ignore packet"
+  packet <- receivePacket [c_SSH_MSG_IGNORE]
+  liftIO $ putStrLn "Ignore packet received"
+  sshMsgIgnoreHandler
 
-sshMsgIgnoreSender :: MonadIO m => ReaderT (SshContext t) m ()
+sshMsgIgnoreSender :: MonadIO m => ReaderT SshContext m ()
 sshMsgIgnoreSender = do
   interval <- asks (sshSettingsIgnoreInterval . sshContextSettings)
   runSshMsgIngnoreSender interval
   where
-    runSshMsgIngnoreSender :: MonadIO m => TimeSpan -> ReaderT (SshContext t) m ()
+    runSshMsgIngnoreSender :: MonadIO m => TimeSpan -> ReaderT SshContext m ()
     runSshMsgIngnoreSender interval = do
       liftIO $ threadDelay (round $ toMicroseconds interval) -- TODO The interval should be random
       sendPacket $ SshPacket c_SSH_MSG_IGNORE [SshString "some data to be random"] -- TODO This should be random
@@ -192,15 +191,17 @@ sshMsgIgnoreSender = do
 
 createPacketStreams :: (InputStream ByteString, OutputStream ByteString) -> IO (InputStream SshRawPacket, OutputStream SshPacket)
 createPacketStreams (is, os) = do
-    newIs <- createPacketInputStream is
-    newOs <- createPacketOutputStream os
-    return (newIs, newOs)
+  newIs <- createPacketInputStream is
+  newOs <- createPacketOutputStream os
+  return (newIs, newOs)
   where
     createPacketInputStream is = Streams.makeInputStream $ readPacket is readRawPacket
     createPacketOutputStream :: OutputStream ByteString -> IO (OutputStream SshPacket)
-    createPacketOutputStream os = Streams.makeOutputStream $ \case -- TODO use fmap
-      Nothing -> Streams.write Nothing os
-      Just packet -> Streams.write (Just $ toSshPacket packet) os
+    createPacketOutputStream os =
+      Streams.makeOutputStream $ -- TODO use fmap
+       \case
+        Nothing -> Streams.write Nothing os
+        Just packet -> Streams.write (Just $ toSshPacket packet) os
 
 readPacket :: InputStream ByteString -> Get a -> IO (Maybe a)
 readPacket is reader = go decoder
@@ -223,15 +224,12 @@ readSshPacketPayload :: Get ByteString
 readSshPacketPayload = do
   packetLength <- fmap fromIntegral getWord32be
   paddingLength <- fmap fromIntegral getWord8
-  payload <- getByteString $ packetLength - paddingLength - 1 - 1
+  payload <- getByteString $ packetLength - paddingLength - 1
   getByteString paddingLength
   return payload
 
 readRawPacket :: Get SshRawPacket
-readRawPacket = SshRawPacket
-    <$> getWord8
-    <*> fmap (BS.concat . LBS.toChunks) getRemainingLazyByteString
-
+readRawPacket = SshRawPacket <$> getWord8 <*> fmap (BS.concat . LBS.toChunks) getRemainingLazyByteString
 
 toSshPacket :: SshPacket -> BS.ByteString
 toSshPacket packet = toSshPacket' $ runPut (putPacket packet)
@@ -246,6 +244,13 @@ toSshPacket packet = toSshPacket' $ runPut (putPacket packet)
       putByteString payload
     dataToPut (SshBoolean True) = putWord8 1
     dataToPut (SshBoolean False) = putWord8 0
+    dataToPut (SshByte b) = putWord8 b
+    dataToPut (SshByteArray _ payload) = putByteString payload -- TODO Check for the same length that expectged
+    dataToPut (SshNameList nameList) = do
+      let listAsByteString = BS.intercalate "," nameList
+      putWord32be $ fromIntegral $ BS.length listAsByteString
+      putByteString listAsByteString
+    dataToPut (SshUInt32 b) = putWord32be b
 
 toSshPacket' :: LBS.ByteString -> BS.ByteString
 toSshPacket' payload =
@@ -276,7 +281,6 @@ protocolAlgorithmNegotiation = [20 .. 29]
 
 protocolKeyExchangeSpecific = [30 .. 49]
 
-
 {-
 data SshProtocol next
   = RecvPacket [Int]
@@ -304,147 +308,20 @@ end = liftF End
 --   kexInit <- recvPacket [c_SSH_MSG_KEXINIT]
 --   --if ()
 --   return kexInit
-protocolExchangeLimitBytes = 64 * 1024
-
--- runSshServer :: (InputStream ByteString, OutputStream ByteString) -> IO ()
+protocolExchangeLimitBytes = 64 * 1024-- runSshServer :: (InputStream ByteString, OutputStream ByteString) -> IO ()
 -- runSshServer = flip runSsh SshRoleServer
-newtype Cookie =
-  MkCookie ByteString
-  deriving (Show)
-
-newCookie = MkCookie $ BS.replicate 16 55 -- TODO Random
-
-algorithmNegotiation ::
-     KexSet -> KexSet -> (KexAlgorithm, HostKeyAlgorithm, EncryptionAlgorithm, MacAlgorithm, CompressionAlgorithm)
-algorithmNegotiation client server =
-  (negotiateKexAlgorithm client server, negotiateHostKeyAlgorithm client server, $notImplemented, $notImplemented, $notImplemented)
-
-findFirst :: Eq a => [a] -> [a] -> Maybe a
-findFirst [] _ = Nothing
-findFirst (x:xs) other =
-  if elem x other
-    then Just x
-    else findFirst xs other
-
--- TODO Check whether the algorithm and the host key needs signature-capable and encryption-cappable
-negotiateKexAlgorithm :: KexSet -> KexSet -> KexAlgorithm
-negotiateKexAlgorithm = negotiateClientMatch kexAlgorithms "No key exchange algorithm"
-
--- TODO Check whether the algorithm and the host key needs signature-capable and encryption-cappable
-negotiateHostKeyAlgorithm :: KexSet -> KexSet -> HostKeyAlgorithm
-negotiateHostKeyAlgorithm = negotiateClientMatch serverHostKeyAlgorithms "No hostkey algorithms"
-
-negotiateClientMatch :: Eq a => (KexSet -> [a]) -> String -> KexSet -> KexSet -> a
-negotiateClientMatch conversion errorMsg client server =
-  fromMaybe (error errorMsg) (findFirst (conversion client) (conversion server))
-
-supportedKexAlgorithms = [KexAlgorithm "diffie-hellman-group1-sha1", KexAlgorithm "diffie-hellman-group14-sha1"]
-
-supportedKeyAlgorithms = [HostKeyAlgorithm "ssh-dss", HostKeyAlgorithm "ssh-rsa"]
-
-supportedEncryptionAlgorithms = [EncryptionAlgorithm "3des-cbc"]
-
-supportedMacAlgorithms = [MacAlgorithm "hmac-sha1"]
-
-supportedCompressionAlgorithms = [CompressionAlgorithm "none"]
-
-supportedLanguages = []
-
-class Named a where
-  nameAsBytestring :: a -> ByteString
-
-data KexAlgorithm = KexAlgorithm
-  { kexAlgorithmName :: ByteString
-  } deriving (Eq, Show)
-
-instance Named KexAlgorithm where
-  nameAsBytestring = kexAlgorithmName
-
-data HostKeyAlgorithm = HostKeyAlgorithm
-  { hostKeyAlgorithmName :: ByteString
-  } deriving (Eq, Show)
-
-instance Named HostKeyAlgorithm where
-  nameAsBytestring = hostKeyAlgorithmName
-
-data EncryptionAlgorithm = EncryptionAlgorithm
-  { encryptionAlgorithmName :: ByteString
-  } deriving (Eq, Show)
-
-instance Named EncryptionAlgorithm where
-  nameAsBytestring = encryptionAlgorithmName
-
-data MacAlgorithm = MacAlgorithm
-  { macAlgorithmName :: ByteString
-  } deriving (Eq, Show)
-
-instance Named MacAlgorithm where
-  nameAsBytestring = macAlgorithmName
-
-data CompressionAlgorithm = CompressionAlgorithm
-  { compressionAlgorithmName :: ByteString
-  } deriving (Eq, Show)
-
-instance Named CompressionAlgorithm where
-  nameAsBytestring = compressionAlgorithmName
-
-data Language = Language
-  { languageName :: ByteString
-  } deriving (Eq, Show)
-
-instance Named Language where
-  nameAsBytestring = languageName
-
-data KexSet = KexSet
-  { kexAlgorithms :: [KexAlgorithm]
-  , serverHostKeyAlgorithms :: [HostKeyAlgorithm]
-  , encryptionAlgorithmsClientToServer :: [EncryptionAlgorithm]
-  , encryptionAlgorithmsServerToClient :: [EncryptionAlgorithm]
-  , macAlgorithmsClientToServer :: [MacAlgorithm]
-  , macAlgorithmsServerToClient :: [MacAlgorithm]
-  , compressionAlgorithmsClientToServer :: [CompressionAlgorithm]
-  , compressionAlgorithmsServerToClient :: [CompressionAlgorithm]
-  , languagesClientToServer :: [Language]
-  , languagesServerToClient :: [Language]
-  } deriving (Show)
-
-supportedKexSet =
-  KexSet
-  { kexAlgorithms = supportedKexAlgorithms
-  , serverHostKeyAlgorithms = supportedKeyAlgorithms
-  , encryptionAlgorithmsClientToServer = supportedEncryptionAlgorithms
-  , encryptionAlgorithmsServerToClient = supportedEncryptionAlgorithms
-  , macAlgorithmsClientToServer = supportedMacAlgorithms
-  , macAlgorithmsServerToClient = supportedMacAlgorithms
-  , compressionAlgorithmsClientToServer = supportedCompressionAlgorithms
-  , compressionAlgorithmsServerToClient = supportedCompressionAlgorithms
-  , languagesClientToServer = supportedLanguages
-  , languagesServerToClient = supportedLanguages
-  }
-
-{-
+  {-
 nameList :: Named a => [a] -> Put
 nameList list = do
   let listAsByteString = BS.intercalate "," (fmap nameAsBytestring list)
   putWord32be $ fromIntegral $ BS.length listAsByteString
   putByteString listAsByteString
 
-getNameList :: (ByteString -> a) -> Get [a]
-getNameList conversion = do
-  nameListLength <- fmap fromIntegral getWord32be
-  listWithCommans <- getByteString nameListLength
-  return $ conversion <$> C8.split ',' listWithCommans
 
 putBoolean :: Bool -> Put
 putBoolean False = putWord8 0
 putBoolean True = putWord8 1
 
-getBoolean :: Get Bool
-getBoolean = do
-  value <- getWord8
-  if value == 0
-    then return False
-    else return True
 
 sendKexInitPacket :: KexSet -> Cookie -> OutputStream ByteString -> IO ()
 sendKexInitPacket kexSet (MkCookie cookieBytes) = Streams.write $ Just $ toSshPacket kexPacket
@@ -488,21 +365,4 @@ newtype Payload =
   Payload ByteString
 
 
-readKexPacket :: Get (Cookie, KexSet, Bool)
-readKexPacket = do
-  messageNumber <- getWord8
-  when (messageNumber /= 20) $ fail "The packet was not a SSH_MSG_KEXINIT packet" -- TODO
-  cookie <- fmap MkCookie (getByteString 16)
-  kexSet <-
-    KexSet <$> getNameList KexAlgorithm <*> getNameList HostKeyAlgorithm <*> getNameList EncryptionAlgorithm <*>
-    getNameList EncryptionAlgorithm <*>
-    getNameList MacAlgorithm <*>
-    getNameList MacAlgorithm <*>
-    getNameList CompressionAlgorithm <*>
-    getNameList CompressionAlgorithm <*>
-    getNameList Language <*>
-    getNameList Language
-  firstKexPacketFollows <- getBoolean
-  getInt32be
-  return (cookie, kexSet, firstKexPacketFollows)
 -}

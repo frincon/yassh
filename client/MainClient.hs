@@ -14,13 +14,13 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
 
+import Control.Monad.Cont
+import Control.Monad.Cont.Class
 import Control.Monad.IO.Class (liftIO)
 import Development.Placeholders
 import Network.Yassh (SshAction, runSshClient)
 import System.Environment (getArgs)
 import System.IO (BufferMode(NoBuffering), hSetBuffering, stdout)
-import Control.Monad.Cont
-import Control.Monad.Cont.Class
 
 main :: IO ()
 main = do

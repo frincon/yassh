@@ -20,6 +20,7 @@ library
                      , Paths_yassh
   other-modules:       Network.Yassh.Internal
                      , Network.Yassh.ProtocolVersionExchange
+                     , Network.Yassh.KeyExchange
   build-depends:       base >= 4.7 && < 5
                      , network
                      , network-simple

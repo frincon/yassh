@@ -16,19 +16,21 @@ module Network.Yassh.Internal
   , SshVersion(..)
   , SshSettings(..)
   , SshContext(..)
-  , SshClientContext(..)
-  , SshServerContext(..)
   , SshAction(..)
   , SshPacket(..)
   , SshRawPacket(..)
   , SshData(..)
+  , SshClientServer(..)
+  , c_SSH_MSG_KEXINIT
+  , c_SSH_MSG_IGNORE
+  , fromRole
   ) where
 
 import Control.Monad.Reader (ReaderT)
 import Data.ByteString (ByteString)
-import Data.Word (Word8)
 import Data.Int (Int64)
 import Data.Time.TimeSpan (TimeSpan)
+import Data.Word (Word32, Word8)
 import System.IO.Streams (InputStream, OutputStream)
 
 data SshRole
@@ -48,22 +50,15 @@ data SshSettings = MkSshSettings
   , sshSettingsIgnoreInterval :: TimeSpan
   }
 
-data SshContext t = MkSshContext
-  { sshContextSpecificContext :: t
-  , sshContextRole :: SshRole
+data SshContext = MkSshContext
+  { sshContextRole :: SshRole
   , sshContextStreams :: (InputStream ByteString, OutputStream ByteString)
   , sshContextSettings :: SshSettings
-  , sshContextPeerVersion :: Maybe SshVersion
-  , sshContextPacketStreams :: Maybe (InputStream SshRawPacket, OutputStream SshPacket)
+  , sshContextPeerVersion :: SshVersion
+  , sshContextPacketStreams :: (InputStream SshRawPacket, OutputStream SshPacket)
   }
 
-data SshClientContext =
-  MkSshClientContext
-
-data SshServerContext =
-  MkSshServerContext
-
-type SshAction t = ReaderT (SshContext t)
+type SshAction = ReaderT SshContext
 
 data SshPacket =
   SshPacket Word8
@@ -76,3 +71,21 @@ data SshRawPacket =
 data SshData
   = SshString ByteString
   | SshBoolean Bool
+  | SshByte Word8
+  | SshByteArray Word8
+                 ByteString
+  | SshNameList [ByteString]
+  | SshUInt32 Word32
+
+c_SSH_MSG_KEXINIT = 20 :: Word8
+
+c_SSH_MSG_IGNORE = 2 :: Word8
+
+data SshClientServer t = SshClientServer
+  { clientData :: t
+  , serverData :: t
+  }
+
+fromRole :: SshRole -> t -> t -> SshClientServer t
+fromRole SshRoleClient local remote = SshClientServer {clientData = local, serverData = remote}
+fromRole SshRoleServer local remote = SshClientServer {clientData = remote, serverData = local}
