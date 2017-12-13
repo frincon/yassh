@@ -36,10 +36,10 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import Data.Version (showVersion)
 
+import Data.Maybe (fromMaybe)
 import System.IO.Streams (InputStream, OutputStream)
 import qualified System.IO.Streams as Streams
 import System.IO.Streams.Attoparsec.ByteString (parseFromStream)
-import Data.Maybe (fromMaybe)
 
 supportedProtocolVersion = "2.0"
 

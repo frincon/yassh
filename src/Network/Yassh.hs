@@ -157,7 +157,13 @@ runFirstKeyExchange = do
   role <- asks sshContextRole
   settings <- asks sshContextSettings
   peerVersion <- asks sshContextPeerVersion
-  result <- liftIO $ runKeyExchange role (fromRole role (sshSettingsVersion settings) (peerVersion)) (receivePacket is) (\p -> (putStrLn "Sending packet" >> (Streams.writeTo os $ Just p)))
+  result <-
+    liftIO $
+    runKeyExchange
+      role
+      (fromRole role (sshSettingsVersion settings) (peerVersion))
+      (receivePacket is)
+      (\p -> (putStrLn "Sending packet" >> (Streams.writeTo os $ Just p)))
   ask -- TODO Make another context with the keys
   where
     receivePacket :: InputStream SshRawPacket -> [Word8] -> IO SshRawPacket
@@ -307,7 +313,7 @@ end = liftF End
 --   kexInit <- recvPacket [c_SSH_MSG_KEXINIT]
 --   --if ()
 --   return kexInit
-protocolExchangeLimitBytes = 64 * 1024-- runSshServer :: (InputStream ByteString, OutputStream ByteString) -> IO ()
+protocolExchangeLimitBytes = 64 * 1024 -- runSshServer :: (InputStream ByteString, OutputStream ByteString) -> IO ()
 -- runSshServer = flip runSsh SshRoleServer
   {-
 nameList :: Named a => [a] -> Put
