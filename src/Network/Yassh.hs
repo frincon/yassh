@@ -28,6 +28,8 @@ module Network.Yassh
   -- , protocolVersionExchangeServer
   , SshAction
   , SshContext
+  , i2bs
+  , bs2i
   ) where
 
 import Control.Applicative ((<|>))
@@ -74,6 +76,12 @@ import System.IO.Streams (InputStream, OutputStream)
 import qualified System.IO.Streams as Streams
 import System.IO.Streams.Attoparsec.ByteString (parseFromStream)
 
+import Data.Bits
+
+import Paths_yassh (version)
+
+libraryName = "yassh"
+
 defaultServerSettings :: SshSettings
 defaultServerSettings =
   MkSshSettings
@@ -81,6 +89,7 @@ defaultServerSettings =
   , sshSettingsOnReceiveBanner = mempty -- no banner from clients
   , sshSettingsProtocolVersionExchangeSizeLimitBytes = defaultProtocolVersionExchangeSizeLimitBytes
   , sshSettingsIgnoreInterval = defaultIgnoreInterval
+  , sshSettingsVersion = SshVersion "2.0" (BS.concat [libraryName, "-", C8.pack $ showVersion version]) Nothing
   }
 
 defaultClientSettings :: SshSettings
@@ -90,6 +99,7 @@ defaultClientSettings =
   , sshSettingsOnReceiveBanner = BS.putStr -- print banner to stdout
   , sshSettingsProtocolVersionExchangeSizeLimitBytes = maxBound
   , sshSettingsIgnoreInterval = defaultIgnoreInterval
+  , sshSettingsVersion = SshVersion "2.0" (C8.pack $ showVersion version) Nothing
   }
 
 defaultOnProtocolVersionExchange :: SshVersion -> IO ()
@@ -145,7 +155,9 @@ runFirstKeyExchange :: MonadIO m => ReaderT SshContext m SshContext
 runFirstKeyExchange = do
   (is, os) <- asks sshContextPacketStreams
   role <- asks sshContextRole
-  result <- liftIO $ runKeyExchange role (receivePacket is) (\p -> (putStrLn "Sending packet" >> (Streams.writeTo os $ Just p)))
+  settings <- asks sshContextSettings
+  peerVersion <- asks sshContextPeerVersion
+  result <- liftIO $ runKeyExchange role (fromRole role (sshSettingsVersion settings) (peerVersion)) (receivePacket is) (\p -> (putStrLn "Sending packet" >> (Streams.writeTo os $ Just p)))
   ask -- TODO Make another context with the keys
   where
     receivePacket :: InputStream SshRawPacket -> [Word8] -> IO SshRawPacket
@@ -201,7 +213,7 @@ createPacketStreams (is, os) = do
       Streams.makeOutputStream $ -- TODO use fmap
        \case
         Nothing -> Streams.write Nothing os
-        Just packet -> Streams.write (Just $ toSshPacket packet) os
+        Just packet -> Streams.write (Just $ sshPacketToByteString packet) os
 
 readPacket :: InputStream ByteString -> Get a -> IO (Maybe a)
 readPacket is reader = go decoder
@@ -231,29 +243,16 @@ readSshPacketPayload = do
 readRawPacket :: Get SshRawPacket
 readRawPacket = SshRawPacket <$> getWord8 <*> fmap (BS.concat . LBS.toChunks) getRemainingLazyByteString
 
-toSshPacket :: SshPacket -> BS.ByteString
-toSshPacket packet = toSshPacket' $ runPut (putPacket packet)
+sshPacketToByteString :: SshPacket -> BS.ByteString
+sshPacketToByteString packet = sshPacketToByteString' $ runPut (putPacket $ toSshRawPacket packet)
   where
-    putPacket :: SshPacket -> Put
-    putPacket (SshPacket msgId otherData) = do
+    putPacket :: SshRawPacket -> Put
+    putPacket (SshRawPacket msgId payload) = do
       putWord8 msgId
-      mapM_ dataToPut otherData
-    dataToPut :: SshData -> Put
-    dataToPut (SshString payload) = do
-      putWord32be $ fromIntegral $ BS.length payload
       putByteString payload
-    dataToPut (SshBoolean True) = putWord8 1
-    dataToPut (SshBoolean False) = putWord8 0
-    dataToPut (SshByte b) = putWord8 b
-    dataToPut (SshByteArray _ payload) = putByteString payload -- TODO Check for the same length that expectged
-    dataToPut (SshNameList nameList) = do
-      let listAsByteString = BS.intercalate "," nameList
-      putWord32be $ fromIntegral $ BS.length listAsByteString
-      putByteString listAsByteString
-    dataToPut (SshUInt32 b) = putWord32be b
 
-toSshPacket' :: LBS.ByteString -> BS.ByteString
-toSshPacket' payload =
+sshPacketToByteString' :: LBS.ByteString -> BS.ByteString
+sshPacketToByteString' payload =
   BS.concat $
   LBS.toChunks $
   LBS.concat -- TODO Not very efficient
@@ -324,7 +323,7 @@ putBoolean True = putWord8 1
 
 
 sendKexInitPacket :: KexSet -> Cookie -> OutputStream ByteString -> IO ()
-sendKexInitPacket kexSet (MkCookie cookieBytes) = Streams.write $ Just $ toSshPacket kexPacket
+sendKexInitPacket kexSet (MkCookie cookieBytes) = Streams.write $ Just $ sshPacketToByteString kexPacket
   where
     kexPacket =
       runPut $ do

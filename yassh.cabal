@@ -37,6 +37,8 @@ library
                      , mtl
                      , exceptions
                      , timespan
+                     , cryptonite
+                     , memory
   default-language:    Haskell2010
 
 executable yassh-server

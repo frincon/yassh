@@ -11,6 +11,7 @@
 -- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
+{-# LANGUAGE OverloadedStrings #-}
 module Network.Yassh.Internal
   ( SshRole(..)
   , SshVersion(..)
@@ -21,17 +22,32 @@ module Network.Yassh.Internal
   , SshRawPacket(..)
   , SshData(..)
   , SshClientServer(..)
+  , ToSshPacket(..)
+  , FromSshRawPacket(..)
+  , ToSshRawPacket(..)
   , c_SSH_MSG_KEXINIT
   , c_SSH_MSG_IGNORE
+  , c_SSH_MSG_KEXDH_INIT
+  , c_SSH_MSG_KEXDH_REPLY
   , fromRole
+  , toIdentificationString
+  , sshRawPacketPayload
+  , i2bs
+  , bs2i
   ) where
 
 import Control.Monad.Reader (ReaderT)
 import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import Data.Int (Int64)
+import Data.Proxy (Proxy)
 import Data.Time.TimeSpan (TimeSpan)
 import Data.Word (Word32, Word8)
 import System.IO.Streams (InputStream, OutputStream)
+import Data.Binary.Put
+import Data.Maybe (fromMaybe)
+import Data.Bits (shiftL, shiftR)
 
 data SshRole
   = SshRoleClient
@@ -48,6 +64,7 @@ data SshSettings = MkSshSettings
   , sshSettingsOnReceiveBanner :: ByteString -> IO ()
   , sshSettingsProtocolVersionExchangeSizeLimitBytes :: Int64
   , sshSettingsIgnoreInterval :: TimeSpan
+  , sshSettingsVersion :: SshVersion
   }
 
 data SshContext = MkSshContext
@@ -68,6 +85,9 @@ data SshRawPacket =
   SshRawPacket Word8
                ByteString
 
+sshRawPacketPayload :: SshRawPacket -> ByteString
+sshRawPacketPayload (SshRawPacket _ payload) = payload
+
 data SshData
   = SshString ByteString
   | SshBoolean Bool
@@ -76,16 +96,100 @@ data SshData
                  ByteString
   | SshNameList [ByteString]
   | SshUInt32 Word32
+  | SshMPint Integer
+
+class ToSshPacket t where
+  toSshPacket :: t -> SshPacket
+
+class FromSshRawPacket t where
+  fromSshRawPacket :: SshRawPacket -> t
+  expectedMsgId :: Proxy t -> Word8
+
+class ToSshRawPacket t where
+  toSshRawPacket :: t -> SshRawPacket
+
+instance ToSshRawPacket SshPacket where
+  toSshRawPacket (SshPacket msgId otherData) =
+    SshRawPacket msgId $ LBS.toStrict $ runPut $ mapM_ dataToPut otherData
+    where
+      dataToPut :: SshData -> Put
+      dataToPut (SshString payload) = do
+        putWord32be $ fromIntegral $ BS.length payload
+        putByteString payload
+      dataToPut (SshBoolean True) = putWord8 1
+      dataToPut (SshBoolean False) = putWord8 0
+      dataToPut (SshByte b) = putWord8 b
+      dataToPut (SshByteArray _ payload) = putByteString payload -- TODO Check for the same length that expectged
+      dataToPut (SshNameList nameList) = do
+        let listAsByteString = BS.intercalate "," nameList
+        putWord32be $ fromIntegral $ BS.length listAsByteString
+        putByteString listAsByteString
+      dataToPut (SshUInt32 b) = putWord32be b
+      dataToPut (SshMPint i) = do
+        putWord32be $ fromIntegral $ BS.length $ i2bs i
+        putByteString $ i2bs i
+
 
 c_SSH_MSG_KEXINIT = 20 :: Word8
 
 c_SSH_MSG_IGNORE = 2 :: Word8
+
+c_SSH_MSG_KEXDH_INIT = 30 :: Word8
+
+c_SSH_MSG_KEXDH_REPLY = 31 :: Word8
 
 data SshClientServer t = SshClientServer
   { clientData :: t
   , serverData :: t
   }
 
+instance Functor SshClientServer where
+  fmap f SshClientServer{clientData=clientData, serverData = serverData} = SshClientServer (f clientData) (f serverData)
+
+
 fromRole :: SshRole -> t -> t -> SshClientServer t
 fromRole SshRoleClient local remote = SshClientServer {clientData = local, serverData = remote}
 fromRole SshRoleServer local remote = SshClientServer {clientData = remote, serverData = local}
+
+toIdentificationString :: SshVersion -> ByteString
+toIdentificationString sshVersion =
+  BS.concat
+    [ "SSH-"
+    , protocolVersion sshVersion
+    , "-"
+    , softwareVersion sshVersion
+    , maybe "" (BS.append " ") (comments sshVersion)
+    ]
+
+-- Copied and modified from https://stackoverflow.com/questions/15047191/read-write-haskell-integer-in-twos-complement-representation
+bs2i :: ByteString -> Integer
+bs2i b
+   | sign = go b - 2 ^ (BS.length b * 8)
+   | otherwise = go b
+   where
+      go = BS.foldl' (\i b -> (i `shiftL` 8) + fromIntegral b) 0
+      sign = BS.index b 0 > 127
+
+i2bs :: Integer -> ByteString
+i2bs x
+   | x == 0 = ""
+   | x < 0 = i2bs $ 2 ^ (8 * bytes) + x
+   | otherwise = if (BS.index positive 0) > 127
+      then BS.append (BS.singleton 0) positive
+      else positive
+   where
+      bytes = (integerLogBase 2 (abs x) + 1) `quot` 8 + 1
+      positive = BS.reverse $ BS.unfoldr go x
+      go i = if i == 0 then Nothing
+                       else Just (fromIntegral i, i `shiftR` 8)
+
+integerLogBase :: Integer -> Integer -> Int
+integerLogBase b i =
+     if i < b then
+        0
+     else
+        -- Try squaring the base first to cut down the number of divisions.
+        let l = 2 * integerLogBase (b*b) i
+            doDiv :: Integer -> Int -> Int
+            doDiv i l = if i < b then l else doDiv (i `div` b) (l+1)
+        in  doDiv (i `div` (b^l)) l

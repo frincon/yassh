@@ -23,7 +23,6 @@ module Network.Yassh.ProtocolVersionExchange
   ) where
 
 import Network.Yassh.Internal
-       (SshRole(..), SshSettings(..), SshVersion(..))
 
 import Control.Applicative ((<|>))
 import Data.Word8 (_hyphen, _space)
@@ -37,10 +36,10 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import Data.Version (showVersion)
 
-import Paths_yassh (version)
 import System.IO.Streams (InputStream, OutputStream)
 import qualified System.IO.Streams as Streams
 import System.IO.Streams.Attoparsec.ByteString (parseFromStream)
+import Data.Maybe (fromMaybe)
 
 supportedProtocolVersion = "2.0"
 
@@ -48,7 +47,7 @@ runProtocolVersionExchange :: (InputStream ByteString, OutputStream ByteString) 
 runProtocolVersionExchange (is, os) role settings =
   snd <$>
   concurrently -- TODO Make sense concurrently?
-    (sendIdentificationString os)
+    (sendIdentificationString (sshSettingsVersion settings) os)
     (receiveIdentificationString is role settings)
 
 receiveIdentificationString :: InputStream ByteString -> SshRole -> SshSettings -> IO SshVersion
@@ -60,8 +59,9 @@ receiveIdentificationString is role settings = do
     SshRoleServer -> return ()
   receiveAndCheckIdentificationString is
 
-sendIdentificationString :: OutputStream ByteString -> IO ()
-sendIdentificationString = Streams.write (Just $ BS.concat ["SSH-2.0-yassh_", C8.pack $ showVersion version, "\r\n"])
+-- TODO Use SshVersion to output as well
+sendIdentificationString :: SshVersion -> OutputStream ByteString -> IO ()
+sendIdentificationString sshVersion = Streams.write (Just $ BS.append (toIdentificationString sshVersion) "\r\n")
 
 receiveBanner :: InputStream ByteString -> IO ByteString
 receiveBanner = parseFromStream bannerLines
