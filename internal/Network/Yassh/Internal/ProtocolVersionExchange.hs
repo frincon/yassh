@@ -14,7 +14,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Network.Yassh.ProtocolVersionExchange
+module Network.Yassh.Internal.ProtocolVersionExchange
   ( runProtocolVersionExchange
   -- TODO Those are for testing, refactor testing to not have to go to this
   -- detailed functions

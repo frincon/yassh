@@ -18,8 +18,7 @@
 module Network.Yassh
   -- ( bannerLines
   -- , receiveBanner
-  ( protocolExchangeLimitBytes
-  , runSshServer
+  ( runSshServer
   , runSshClient
   , defaultServerSettings
   , defaultClientSettings
@@ -28,8 +27,6 @@ module Network.Yassh
   -- , protocolVersionExchangeServer
   , SshAction
   , SshContext
-  , i2bs
-  , bs2i
   ) where
 
 import Control.Applicative ((<|>))
@@ -68,7 +65,7 @@ import Network.Socket (PortNumber, SockAddr, Socket)
 import Network.Socket.ByteString (recv, sendAll)
 import Network.Yassh.Internal
 import Network.Yassh.KeyExchange (runKeyExchange)
-import Network.Yassh.ProtocolVersionExchange
+import Network.Yassh.Internal.ProtocolVersionExchange
        (runProtocolVersionExchange)
 import Paths_yassh (version)
 import System.IO (hFlush, stdout)
@@ -77,8 +74,6 @@ import qualified System.IO.Streams as Streams
 import System.IO.Streams.Attoparsec.ByteString (parseFromStream)
 
 import Data.Bits
-
-import Paths_yassh (version)
 
 libraryName = "yassh"
 
@@ -89,7 +84,7 @@ defaultServerSettings =
   , sshSettingsOnReceiveBanner = mempty -- no banner from clients
   , sshSettingsProtocolVersionExchangeSizeLimitBytes = defaultProtocolVersionExchangeSizeLimitBytes
   , sshSettingsIgnoreInterval = defaultIgnoreInterval
-  , sshSettingsVersion = SshVersion "2.0" (BS.concat [libraryName, "-", C8.pack $ showVersion version]) Nothing
+  , sshSettingsVersion = defaultVersion
   }
 
 defaultClientSettings :: SshSettings
@@ -99,8 +94,11 @@ defaultClientSettings =
   , sshSettingsOnReceiveBanner = BS.putStr -- print banner to stdout
   , sshSettingsProtocolVersionExchangeSizeLimitBytes = maxBound
   , sshSettingsIgnoreInterval = defaultIgnoreInterval
-  , sshSettingsVersion = SshVersion "2.0" (C8.pack $ showVersion version) Nothing
+  , sshSettingsVersion = defaultVersion
   }
+
+defaultVersion :: SshVersion
+defaultVersion = SshVersion "2.0" (BS.concat [libraryName, "-", C8.pack $ showVersion version]) Nothing
 
 defaultOnProtocolVersionExchange :: SshVersion -> IO ()
 defaultOnProtocolVersionExchange = print
@@ -313,7 +311,6 @@ end = liftF End
 --   kexInit <- recvPacket [c_SSH_MSG_KEXINIT]
 --   --if ()
 --   return kexInit
-protocolExchangeLimitBytes = 64 * 1024 -- runSshServer :: (InputStream ByteString, OutputStream ByteString) -> IO ()
 -- runSshServer = flip runSsh SshRoleServer
   {-
 nameList :: Named a => [a] -> Put

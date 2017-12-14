@@ -20,7 +20,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BC
 import Network.Yassh
 import Network.Yassh.Internal
-import Network.Yassh.ProtocolVersionExchange
+import Network.Yassh.Internal.ProtocolVersionExchange
 import qualified System.IO.Streams as Streams
 import System.IO.Streams.ByteString (fromByteString)
 import Test.Hspec
