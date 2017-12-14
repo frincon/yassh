@@ -33,13 +33,18 @@ module Network.Yassh.Internal
   , c_SSH_MSG_KEXDH_INIT
   , c_SSH_MSG_KEXDH_REPLY
   , fromRole
+  , roleBased
   , toIdentificationString
   , sshRawPacketPayload
+  , getMPint
   , i2bs
   , bs2i
   ) where
 
 import Control.Monad.Reader (ReaderT)
+import Data.Binary.Get
+       (Get, getByteString, getInt32be, getRemainingLazyByteString,
+        getWord32be, getWord8, runGet, runGetIncremental)
 import Data.Binary.Put
 import Data.Bits (shiftL, shiftR)
 import Data.ByteString (ByteString)
@@ -154,6 +159,19 @@ fromRole SshRoleServer local remote = SshClientServer {clientData = remote, serv
 toIdentificationString :: SshVersion -> ByteString
 toIdentificationString sshVersion =
   BS.concat ["SSH-", protocolVersion sshVersion, "-", softwareVersion sshVersion, maybe "" (BS.append " ") (comments sshVersion)]
+
+roleBased :: SshRole -> a -> a -> a
+roleBased SshRoleServer server _ = server
+roleBased SshRoleClient _ client = client
+
+getMPint :: Get Integer
+getMPint = do
+  mpLength <- getWord32be
+  if mpLength == 0
+    then return 0
+    else do
+      intAsTwoComplement <- getByteString (fromIntegral mpLength)
+      return $ bs2i intAsTwoComplement
 
 -- Copied and modified from https://stackoverflow.com/questions/15047191/read-write-haskell-integer-in-twos-complement-representation
 bs2i :: ByteString -> Integer

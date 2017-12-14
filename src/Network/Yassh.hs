@@ -64,9 +64,9 @@ import Network.Simple.TCP (connect, serve)
 import Network.Socket (PortNumber, SockAddr, Socket)
 import Network.Socket.ByteString (recv, sendAll)
 import Network.Yassh.Internal
-import Network.Yassh.KeyExchange (runKeyExchange)
 import Network.Yassh.Internal.ProtocolVersionExchange
        (runProtocolVersionExchange)
+import Network.Yassh.KeyExchange (runKeyExchange)
 import Paths_yassh (version)
 import System.IO (hFlush, stdout)
 import System.IO.Streams (InputStream, OutputStream)
@@ -283,7 +283,6 @@ protocolTransportLayerGeneric = [1 .. 19]
 protocolAlgorithmNegotiation = [20 .. 29]
 
 protocolKeyExchangeSpecific = [30 .. 49]
-
 {-
 data SshProtocol next
   = RecvPacket [Int]

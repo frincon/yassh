@@ -44,6 +44,8 @@ library yassh-internal
   hs-source-dirs:      internal
   exposed-modules:     Network.Yassh.Internal
                      , Network.Yassh.Internal.ProtocolVersionExchange
+                     , Network.Yassh.Internal.KeyExchange
+                     , Network.Yassh.Internal.KeyExchange.DiffieHellman
   build-depends:       base >= 4.7 && < 5
                      , network
                      , network-simple

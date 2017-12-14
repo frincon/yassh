@@ -21,8 +21,6 @@ module Network.Yassh.KeyExchange
 
 import Control.Monad (void, when)
 import Crypto.Hash
-import Crypto.Number.Serialize
-import Crypto.PubKey.DH
 import Crypto.PubKey.RSA
 import Crypto.PubKey.RSA.PKCS15
 import Data.Binary.Get
@@ -34,12 +32,13 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as LBS
 import Data.Either (either)
-import Data.Function (on)
 import Data.Maybe (fromMaybe)
 import Data.Proxy (Proxy(Proxy))
 import Data.Word8 (Word8)
 import Development.Placeholders
 import Network.Yassh.Internal
+import Network.Yassh.Internal.KeyExchange
+import Network.Yassh.Internal.KeyExchange.DiffieHellman --TODO This should not be here
 
 data SshPacketKexInit = SshPacketKexInit
   { kexInitCookie :: Cookie
@@ -74,26 +73,6 @@ instance ToSshPacket SshPacketKexInit where
 instance FromSshRawPacket SshPacketKexInit where
   fromSshRawPacket (SshRawPacket _ payload) = runGet readKexPacket $ LBS.fromStrict payload
   expectedMsgId _ = c_SSH_MSG_KEXINIT
-
-data SshPacketKexdhInit = SshPacketKexdhInit
-  { kexdhInitClientValue :: PublicNumber
-  }
-
-data SshPacketKexdhReply = SshPacketKexdhReply
-  { kexdhReplyHostKey :: ByteString
-  , kexdhReplyServerValue :: PublicNumber
-  , kexdhReplySignatureExchangeHash :: ByteString
-  }
-
-instance FromSshRawPacket SshPacketKexdhInit where
-  fromSshRawPacket (SshRawPacket _ payload) = runGet readKexdhInitPacket $ LBS.fromStrict payload
-  expectedMsgId _ = c_SSH_MSG_KEXDH_INIT
-
-instance ToSshPacket SshPacketKexdhReply where
-  toSshPacket SshPacketKexdhReply { kexdhReplyHostKey = hostKey
-                                  , kexdhReplyServerValue = (PublicNumber serverValue)
-                                  , kexdhReplySignatureExchangeHash = signature
-                                  } = SshPacket c_SSH_MSG_KEXDH_REPLY [SshString hostKey, SshMPint serverValue, SshString signature]
 
 runKeyExchange :: SshRole -> SshClientServer SshVersion -> ([Word8] -> IO SshRawPacket) -> (SshPacket -> IO ()) -> IO ()
 runKeyExchange role versions recv send
@@ -140,62 +119,6 @@ runKeyExchange role versions recv send
 
 kexInitPacket :: SshPacketKexInit
 kexInitPacket = SshPacketKexInit newCookie supportedKexSet False
-
-class Named a where
-  nameAsBytestring :: a -> ByteString
-
-data KexAlgorithm = KexAlgorithm
-  { kexAlgorithmName :: ByteString
-  , requresEncryptionCapable :: Bool
-  , requresSignatureCapable :: Bool
-  , runKex :: SshRole -> KexContext -> ([Word8] -> IO SshRawPacket) -> (SshPacket -> IO ()) -> IO ()
-  }
-
-instance Eq KexAlgorithm where
-  (==) = (==) `on` kexAlgorithmName
-
-instance Show KexAlgorithm where
-  show t = "KexAlgorithm " ++ show (kexAlgorithmName t)
-
-instance Named KexAlgorithm where
-  nameAsBytestring = kexAlgorithmName
-
-data HostKeyAlgorithm = HostKeyAlgorithm
-  { hostKeyAlgorithmName :: ByteString
-  , isEncryptionCapable :: Bool
-  , isSignatureCapable :: Bool
-  } deriving (Eq, Show)
-
-instance Named HostKeyAlgorithm where
-  nameAsBytestring = hostKeyAlgorithmName
-
-data EncryptionAlgorithm = EncryptionAlgorithm
-  { encryptionAlgorithmName :: ByteString
-  } deriving (Eq, Show)
-
-instance Named EncryptionAlgorithm where
-  nameAsBytestring = encryptionAlgorithmName
-
-data MacAlgorithm = MacAlgorithm
-  { macAlgorithmName :: ByteString
-  } deriving (Eq, Show)
-
-instance Named MacAlgorithm where
-  nameAsBytestring = macAlgorithmName
-
-data CompressionAlgorithm = CompressionAlgorithm
-  { compressionAlgorithmName :: ByteString
-  } deriving (Eq, Show)
-
-instance Named CompressionAlgorithm where
-  nameAsBytestring = compressionAlgorithmName
-
-data Language = Language
-  { languageName :: ByteString
-  } deriving (Eq, Show)
-
-instance Named Language where
-  nameAsBytestring = languageName
 
 data KexSet = KexSet
   { kexAlgorithms :: [KexAlgorithm]
@@ -315,9 +238,6 @@ readKexPacket = do
   getInt32be -- the last uint32
   return $ SshPacketKexInit cookie kexSet firstKexPacketFollows
 
-readKexdhInitPacket :: Get SshPacketKexdhInit
-readKexdhInitPacket = SshPacketKexdhInit <$> fmap PublicNumber getMPint
-
 getNameList :: (ByteString -> a) -> Get [a]
 getNameList conversion = do
   nameListLength <- fmap fromIntegral getWord32be
@@ -331,19 +251,10 @@ getBoolean = do
     then return False
     else return True
 
-getMPint :: Get Integer
-getMPint = do
-  mpLength <- getWord32be
-  if mpLength == 0
-    then return 0
-    else do
-      intAsTwoComplement <- getByteString (fromIntegral mpLength)
-      return $ bs2i intAsTwoComplement
-
 knownKexAlgorithms :: [(ByteString, KexAlgorithm)]
 knownKexAlgorithms =
-  [ buildEntry "diffie-hellman-group1-sha1" True True runDhGroup1Sha1
-  , buildEntry "diffie-hellman-group14-sha1" True True runDhGroup14Sha1
+  [ (kexAlgorithmName diffieHellmanGroup1Sha1, diffieHellmanGroup1Sha1)
+  , (kexAlgorithmName diffieHellmanGroup14Sha1, diffieHellmanGroup14Sha1)
   ]
   where
     buildEntry key req1 req2 req3 = (key, KexAlgorithm key req1 req2 req3)
@@ -356,67 +267,3 @@ knownHostKeyAlgorithms = [buildEntry "ssh-dss" True True, buildEntry "ssh-rsa" T
     buildEntry key req1 req2 = (key, HostKeyAlgorithm key req1 req2)
 
 findHostKeyAlgorithm key = fromMaybe (HostKeyAlgorithm key False False) (lookup key knownHostKeyAlgorithms)
-
-runDhGroup1Sha1 :: SshRole -> KexContext -> ([Word8] -> IO SshRawPacket) -> (SshPacket -> IO ()) -> IO ()
-runDhGroup1Sha1 = $notImplemented
-
-runDhGroup14Sha1 :: SshRole -> KexContext -> ([Word8] -> IO SshRawPacket) -> (SshPacket -> IO ()) -> IO ()
-runDhGroup14Sha1 role = roleBased role runDhGroup14Sha1Server runDhGroup14Sha1Client
-
-group14Prime =
-  0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF
-
-group14Generator = 2
-
-group14Bits = 2048
-
-group14params = Params {params_p = group14Prime, params_g = group14Generator, params_bits = group14Bits}
-
-runDhGroup14Sha1Server :: KexContext -> ([Word8] -> IO SshRawPacket) -> (SshPacket -> IO ()) -> IO ()
-runDhGroup14Sha1Server context recv send = do
-  otherPartyPublicNumber <- kexdhInitClientValue <$> recv' (Proxy :: Proxy SshPacketKexdhInit) -- e
-  privateNumber <- generatePrivate group14params -- y
-  let publicNumber = calculatePublic group14params privateNumber -- f
-  let sharedKey = getShared group14params privateNumber otherPartyPublicNumber -- K
-  print sharedKey
-  let exchangeString =
-        sshRawPacketPayload $
-        toSshRawPacket $
-        SshPacket
-          0
-          [ SshString $ clientData $ kexContextIdentificationString context
-          , SshString $ serverData $ kexContextIdentificationString context
-          , SshString $ BS.append (BS.singleton c_SSH_MSG_KEXINIT) (sshRawPacketPayload $ clientData $ kexContextMsgInit context)
-          , SshString $ BS.append (BS.singleton c_SSH_MSG_KEXINIT) (sshRawPacketPayload $ serverData $ kexContextMsgInit context)
-          , SshString $ kexContextHostKeyEncoded context
-          , SshMPint $ extractInteger otherPartyPublicNumber
-          , SshMPint $ extractInteger publicNumber
-          , SshMPint $ os2ip sharedKey
-          ]
-  print exchangeString
-  let exchangeHash = (convert $ sha1 exchangeString) :: ByteString
-  let signature = kexContextSign context exchangeHash
-  send $ toSshPacket $ SshPacketKexdhReply (kexContextHostKeyEncoded context) publicNumber signature
-  recv [0 .. 100]
-  return ()
-  where
-    recv' :: FromSshRawPacket p => Proxy p -> IO p
-    recv' proxy = fromSshRawPacket <$> recv [expectedMsgId proxy]
-    extractInteger (PublicNumber i) = i
-    sha1 :: ByteString -> Digest SHA1
-    sha1 = hash
-
-runDhGroup14Sha1Client :: KexContext -> ([Word8] -> IO SshRawPacket) -> (SshPacket -> IO ()) -> IO ()
-runDhGroup14Sha1Client = $notImplemented
-
-roleBased :: SshRole -> a -> a -> a
-roleBased SshRoleServer server _ = server
-roleBased SshRoleClient _ client = client
-
-data KexContext = KexContext
-  { kexContextIdentificationString :: SshClientServer ByteString
-  , kexContextMsgInit :: SshClientServer SshRawPacket
-  , kexContextHostKeyAlgorithm :: HostKeyAlgorithm
-  , kexContextHostKeyEncoded :: ByteString
-  , kexContextSign :: ByteString -> ByteString
-  }
