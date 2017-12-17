@@ -17,34 +17,11 @@ library
   hs-source-dirs:      src
   exposed-modules:     Network.Yassh
                      , Network.Yassh.IOStreams
-                     , Paths_yassh
-  other-modules:       Network.Yassh.KeyExchange
-  build-depends:       base >= 4.7 && < 5
-                     , yassh-internal
-                     , network
-                     , network-simple
-                     , bytestring
-                     , text
-                     , placeholders
-                     , attoparsec
-                     , io-streams
-                     , word8
-                     , binary
-                     , cryptonite
-                     , free
-                     , async
-                     , mtl
-                     , exceptions
-                     , timespan
-                     , cryptonite
-                     , memory
-  default-language:    Haskell2010
-
-library yassh-internal
-  hs-source-dirs:      internal
-  exposed-modules:     Network.Yassh.Internal
+                     , Network.Yassh.KeyExchange
+                     , Network.Yassh.Internal
                      , Network.Yassh.Internal.ProtocolVersionExchange
-                     , Network.Yassh.Internal.KeyExchange
+  other-modules:       Paths_yassh
+                     , Network.Yassh.Internal.KeyExchange 
                      , Network.Yassh.Internal.KeyExchange.DiffieHellman
   build-depends:       base >= 4.7 && < 5
                      , network
@@ -92,7 +69,6 @@ test-suite yassh-test
   main-is:             Spec.hs
   build-depends:       base
                      , yassh
-                     , yassh-internal
                      , attoparsec
                      , io-streams
                      , bytestring
