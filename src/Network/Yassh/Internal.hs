@@ -139,7 +139,7 @@ instance ToSshRawPacket SshPacket where
 
 -- TODO Refactor this, it is little bit ugly
 sshEncode :: [SshData] -> ByteString
-sshEncode = sshRawPacketPayload $ toSshRawPacket $ SshPacket 0
+sshEncode p = sshRawPacketPayload $ toSshRawPacket $ SshPacket 0 p
 
 c_SSH_MSG_KEXINIT = 20 :: Word8
 
