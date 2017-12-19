@@ -92,7 +92,7 @@ defaultClientSettings =
   MkSshSettings
   { sshSettingsOnProtocolVersionExchange = defaultOnProtocolVersionExchange
   , sshSettingsOnReceiveBanner = BS.putStr -- print banner to stdout
-  , sshSettingsProtocolVersionExchangeSizeLimitBytes = maxBound
+  , sshSettingsProtocolVersionExchangeSizeLimitBytes = maxBound -- TODO It can blow up the memory as the reading is full before call to OnReceiveBanner
   , sshSettingsIgnoreInterval = defaultIgnoreInterval
   , sshSettingsVersion = defaultVersion
   }

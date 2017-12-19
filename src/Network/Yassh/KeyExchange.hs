@@ -102,10 +102,7 @@ runKeyExchange role versions recv send
         , kexContextHostKeyEncoded = encodeRsaPubKey publicHostKey
         , kexContextSign =
             \toSign ->
-              sshRawPacketPayload $
-              toSshRawPacket $
-              SshPacket
-                0
+              sshEncode
                 [SshString "ssh-rsa", SshString $ either (error . show) id $ sign Nothing (Just SHA1) privateHostKey toSign]
         }
   (runKex $ negotiatedKexAlgorithm result) role kexContext recv send
@@ -115,7 +112,7 @@ runKeyExchange role versions recv send
       (head (kexAlgorithms received) /= head (kexAlgorithms sent)) ||
       (head (serverHostKeyAlgorithms received) /= head (serverHostKeyAlgorithms sent))
     encodeRsaPubKey (PublicKey _ n e) =
-      sshRawPacketPayload $ toSshRawPacket $ SshPacket 0 [SshString "ssh-rsa", SshMPint e, SshMPint n]
+      sshEncode [SshString "ssh-rsa", SshMPint e, SshMPint n]
 
 kexInitPacket :: SshPacketKexInit
 kexInitPacket = SshPacketKexInit newCookie supportedKexSet False

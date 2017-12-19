@@ -37,6 +37,7 @@ module Network.Yassh.Internal
   , toIdentificationString
   , sshRawPacketPayload
   , getMPint
+  , sshEncode
   , i2bs
   , bs2i
   ) where
@@ -135,6 +136,10 @@ instance ToSshRawPacket SshPacket where
       dataToPut (SshMPint i) = do
         putWord32be $ fromIntegral $ BS.length $ i2bs i
         putByteString $ i2bs i
+
+-- TODO Refactor this, it is little bit ugly
+sshEncode :: [SshData] -> ByteString
+sshEncode = sshRawPacketPayload $ toSshRawPacket $ SshPacket 0
 
 c_SSH_MSG_KEXINIT = 20 :: Word8
 
