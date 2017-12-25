@@ -16,15 +16,11 @@
 {-# LANGUAGE LambdaCase #-}
 
 module Network.Yassh
-  -- ( bannerLines
-  -- , receiveBanner
   ( runSshServer
   , runSshClient
   , defaultServerSettings
   , defaultClientSettings
   , SshVersion(..)
-  -- , protocolVersionExchangeClient
-  -- , protocolVersionExchangeServer
   , SshAction
   , SshContext
   ) where
@@ -64,9 +60,12 @@ import Network.Simple.TCP (connect, serve)
 import Network.Socket (PortNumber, SockAddr, Socket)
 import Network.Socket.ByteString (recv, sendAll)
 import Network.Yassh.Internal
+import Network.Yassh.Internal.KeyExchange -- TODO Remove from here
 import Network.Yassh.Internal.ProtocolVersionExchange
        (runProtocolVersionExchange)
 import Network.Yassh.KeyExchange (runKeyExchange)
+import Network.Yassh.KeyExchange.DiffieHellman
+       (diffieHellmanGroup14Sha1, diffieHellmanGroup1Sha1)
 import Paths_yassh (version)
 import System.IO (hFlush, stdout)
 import System.IO.Streams (InputStream, OutputStream)
@@ -85,6 +84,7 @@ defaultServerSettings =
   , sshSettingsProtocolVersionExchangeSizeLimitBytes = defaultProtocolVersionExchangeSizeLimitBytes
   , sshSettingsIgnoreInterval = defaultIgnoreInterval
   , sshSettingsVersion = defaultVersion
+  , sshSettingsKexProtocolsAllowed = defaultKexProtocolsAllowed
   }
 
 defaultClientSettings :: SshSettings
@@ -95,6 +95,7 @@ defaultClientSettings =
   , sshSettingsProtocolVersionExchangeSizeLimitBytes = maxBound -- TODO It can blow up the memory as the reading is full before call to OnReceiveBanner
   , sshSettingsIgnoreInterval = defaultIgnoreInterval
   , sshSettingsVersion = defaultVersion
+  , sshSettingsKexProtocolsAllowed = defaultKexProtocolsAllowed
   }
 
 defaultVersion :: SshVersion
@@ -109,6 +110,10 @@ defaultProtocolVersionExchangeSizeLimitBytes = 64 * 1024
 defaultIgnoreInterval :: TimeSpan
 defaultIgnoreInterval = minutes 1
 
+-- TODO Move this to Key exchange? So that we dont need to import directly diffie hellman stuff here
+defaultKexProtocolsAllowed :: [ByteString]
+defaultKexProtocolsAllowed = [nameAsBytestring diffieHellmanGroup14Sha1, nameAsBytestring diffieHellmanGroup14Sha1]
+
 type Shell = ((IO (Maybe ByteString), ByteString -> IO (), ByteString -> IO ()) -> IO ())
 
 -- TODO Check if we can get rid of MonadMask
@@ -116,14 +121,19 @@ runSshClient :: (MonadIO m, MonadMask m) => String -> SshAction m r -> m r
 runSshClient hostName program = connect hostName "22" (runSshClientConnection program defaultClientSettings)
 
 runSshServer :: PortNumber -> Shell -> IO ()
-runSshServer port shell = serve "*" (show port) (runSecure . runSshServerConnection shell defaultServerSettings)
+runSshServer port shell = do
+  putStrLn $ "Start listening on port " ++ show port
+  serve "*" (show port) (runSecure . runSshServerConnection shell defaultServerSettings)
 
 runSecure :: IO () -> IO ()
-runSecure program = catch program (\e -> print (e :: SomeException))
+runSecure program = do
+  putStrLn "Running secure other program"
+  catch program (\e -> print (e :: SomeException))
 
 -- TODO Shell should be part of the settings
 runSshServerConnection :: MonadIO m => Shell -> SshSettings -> (Socket, SockAddr) -> m ()
 runSshServerConnection shell settings (connectionSocket, sockAddr) = do
+  liftIO $ putStrLn $ "New connection from " ++ show sockAddr
   context <- initializeConnection settings SshRoleServer connectionSocket
   -- TODO Run the shell
   return ()
@@ -160,6 +170,7 @@ runFirstKeyExchange = do
     runKeyExchange
       role
       (fromRole role (sshSettingsVersion settings) (peerVersion))
+      (sshSettingsKexProtocolsAllowed settings)
       (receivePacket is)
       (\p -> (putStrLn "Sending packet" >> (Streams.writeTo os $ Just p)))
   ask -- TODO Make another context with the keys

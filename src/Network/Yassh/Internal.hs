@@ -74,6 +74,7 @@ data SshSettings = MkSshSettings
   , sshSettingsProtocolVersionExchangeSizeLimitBytes :: Int64
   , sshSettingsIgnoreInterval :: TimeSpan
   , sshSettingsVersion :: SshVersion
+  , sshSettingsKexProtocolsAllowed :: [ByteString]
   }
 
 data SshContext = MkSshContext

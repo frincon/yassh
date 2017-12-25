@@ -18,11 +18,11 @@ library
   exposed-modules:     Network.Yassh
                      , Network.Yassh.IOStreams
                      , Network.Yassh.KeyExchange
+                     , Network.Yassh.KeyExchange.DiffieHellman
                      , Network.Yassh.Internal
                      , Network.Yassh.Internal.ProtocolVersionExchange
   other-modules:       Paths_yassh
-                     , Network.Yassh.Internal.KeyExchange 
-                     , Network.Yassh.Internal.KeyExchange.DiffieHellman
+                     , Network.Yassh.Internal.KeyExchange
   build-depends:       base >= 4.7 && < 5
                      , network
                      , network-simple

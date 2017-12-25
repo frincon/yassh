@@ -11,6 +11,8 @@
 -- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
+{-# LANGUAGE ExistentialQuantification #-}
+
 module Network.Yassh.Internal.KeyExchange
   ( KexContext(..)
   , Named(..)
@@ -20,8 +22,10 @@ module Network.Yassh.Internal.KeyExchange
   , MacAlgorithm(..)
   , CompressionAlgorithm(..)
   , Language(..)
+  , KexResult(..)
   ) where
 
+import Data.ByteArray (ByteArray)
 import Data.ByteString (ByteString)
 import Data.Function (on)
 import Data.Word (Word8)
@@ -38,18 +42,18 @@ data KexContext = KexContext
 class Named a where
   nameAsBytestring :: a -> ByteString
 
-data KexAlgorithm = KexAlgorithm
-  { kexAlgorithmName :: ByteString
-  , requresEncryptionCapable :: Bool
-  , requresSignatureCapable :: Bool
-  , runKex :: SshRole -> KexContext -> ([Word8] -> IO SshRawPacket) -> (SshPacket -> IO ()) -> IO ()
+data KexResult = KexResult
+  { kexResultExchangeHash :: ByteString
+  , kexResultSharedKey :: ByteString
   }
 
-instance Eq KexAlgorithm where
-  (==) = (==) `on` kexAlgorithmName
-
-instance Show KexAlgorithm where
-  show t = "KexAlgorithm " ++ show (kexAlgorithmName t)
+data KexAlgorithm = KexAlgorithm
+  { kexAlgorithmName :: ByteString
+  , requiresEncryptionCapable :: Bool
+  , requiresSignatureCapable :: Bool
+  , runKex :: SshRole -> KexContext -> ([Word8] -> IO SshRawPacket) -> (SshPacket -> IO ()) -> IO KexResult
+  , hash :: ByteString -> ByteString
+  }
 
 instance Named KexAlgorithm where
   nameAsBytestring = kexAlgorithmName
@@ -59,6 +63,9 @@ data HostKeyAlgorithm = HostKeyAlgorithm
   , isEncryptionCapable :: Bool
   , isSignatureCapable :: Bool
   } deriving (Eq, Show)
+
+instance Show KexAlgorithm where
+  show a = "KexAlgorithm " ++ (show $ kexAlgorithmName a)
 
 instance Named HostKeyAlgorithm where
   nameAsBytestring = hostKeyAlgorithmName
