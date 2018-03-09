@@ -66,7 +66,7 @@ import Network.Socket.ByteString (recv, sendAll)
 import Network.Yassh.Internal
 import Network.Yassh.Internal.ProtocolVersionExchange
        (runProtocolVersionExchange)
-import Network.Yassh.KeyExchange (runKeyExchange)
+import Network.Yassh.Internal.KeyExchange (runKeyExchange)
 import Paths_yassh (version)
 import System.IO (hFlush, stdout)
 import System.IO.Streams (InputStream, OutputStream)
