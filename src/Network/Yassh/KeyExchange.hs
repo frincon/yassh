@@ -26,31 +26,23 @@ import Crypto.PubKey.RSA.PKCS15
 import Data.Binary.Get
        (Get, getByteString, getInt32be, getRemainingLazyByteString,
         getWord32be, getWord8, runGet, runGetIncremental)
-import Data.ByteArray (ByteArray, convert)
+import Data.ByteArray (convert)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as LBS
 import Data.Either (either)
-import Data.Maybe (fromMaybe, fromJust)
+import Data.Maybe (fromMaybe)
 import Data.Proxy (Proxy(Proxy))
 import Data.Word8 (Word8)
 import Development.Placeholders
 import Network.Yassh.Internal
 import Network.Yassh.Internal.KeyExchange
-import Network.Yassh.KeyExchange.DiffieHellman --TODO This should not be here
+import Network.Yassh.Internal.KeyExchange.DiffieHellman --TODO This should not be here
 
-{-
 data SshPacketKexInit = SshPacketKexInit
   { kexInitCookie :: Cookie
-  , kexInitKexAlgorithms :: [ByteString]
-  , kexInitHostKeyAlgorithms :: [ByteString]
-  , kexInitEncryptionAlgorithmsClientToServer :: [ByteString]
-  , kexInitEncryptionAlgorithmsServerToClient :: [ByteString]
-  , kexInitKexAlgorithms :: [ByteString]
-  , kexInitKexAlgorithms :: [ByteString]
-  , kexInitKexAlgorithms :: [ByteString]
-  , kexInitKexAlgorithms :: [ByteString]
+  , kexInitKexSet :: KexSet
   , kexInitFirstKexPacketFollow :: Bool
   } deriving (Show)
 
@@ -59,20 +51,9 @@ instance ToSshPacket SshPacketKexInit where
                                , kexInitKexSet = kexSet
                                , kexInitFirstKexPacketFollow = firstKexPacketFollows
                                } =
-    where
-      extractNameList f = f kexSet
-
-instance FromSshRawPacket SshPacketKexInit where
-  fromSshRawPacket (SshRawPacket _ payload) = runGet readKexPacket $ LBS.fromStrict payload
-  expectedMsgId _ = c_SSH_MSG_KEXINIT
--}
-
--- TODO The first kexAlgorithm should be supported by the host key algorithm
-sshPacketKexInit :: Cookie -> KexSet -> SshPacket
-sshPacketKexInit (MkCookie cookieBytes) kexSet =
-  SshPacket
+    SshPacket
       c_SSH_MSG_KEXINIT
-      [ SshByteArray 16 cookieBytes -- TODO Ensure 16 bytes
+      [ SshByteArray 16 cookieBytes
       , SshNameList $ nameAsBytestring <$> kexAlgorithms kexSet
       , SshNameList $ nameAsBytestring <$> serverHostKeyAlgorithms kexSet
       , SshNameList $ nameAsBytestring <$> encryptionAlgorithmsClientToServer kexSet
@@ -83,40 +64,34 @@ sshPacketKexInit (MkCookie cookieBytes) kexSet =
       , SshNameList $ nameAsBytestring <$> compressionAlgorithmsServerToClient kexSet
       , SshNameList $ nameAsBytestring <$> languagesClientToServer kexSet
       , SshNameList $ nameAsBytestring <$> languagesServerToClient kexSet
-      , SshBoolean False
+      , SshBoolean firstKexPacketFollows
       , SshUInt32 0 -- Future use
       ]
+    where
+      extractNameList f = f kexSet
 
-data SshDirectional t = SshDirectional
-  { clientToServer :: t
-  , serverToClient :: t
-  }
+instance FromSshRawPacket SshPacketKexInit where
+  fromSshRawPacket (SshRawPacket _ payload) = runGet readKexPacket $ LBS.fromStrict payload
+  expectedMsgId _ = c_SSH_MSG_KEXINIT
 
-bothDirections :: t -> SshDirectional t
-bothDirections param = SshDirectional param param
-
-runKeyExchange ::
-     SshRole -> SshClientServer SshVersion -> [KexAlgorithm] -> ([Word8] -> IO SshRawPacket) -> (SshPacket -> IO ()) -> IO ()
-runKeyExchange role versions kexAlgs recv send
+runKeyExchange :: SshRole -> SshClientServer SshVersion -> ([Word8] -> IO SshRawPacket) -> (SshPacket -> IO ()) -> IO ()
+runKeyExchange role versions recv send
     -- TODO Remove this from here
  = do
   (publicHostKey, privateHostKey) <- generate 256 65537
   print publicHostKey
     -- End
   putStrLn "Running key exchange"
-  let cookie = newCookie
-  let kexInitRawPacketSent = toSshRawPacket $ sshPacketKexInit $ cookie (supportedKexSet kexAlgs)
-  send $ sshPacketKexInit $ cookie (supportedKexSet kexAlgs) -- TODO Send should return payload and encripted payload?
+  let kexInitRawPacketSent = toSshRawPacket $ toSshPacket kexInitPacket
+  send $ toSshPacket kexInitPacket
   putStrLn "SSH_MSG_KEXINIT Sent"
   kexInitRawPacketReceived <- recv [c_SSH_MSG_KEXINIT]
   let kexInitReceived = fromSshRawPacket kexInitRawPacketReceived
   putStrLn "SSH_MSG_KEXINIT Received"
   when
-    (kexInitFirstKexPacketFollow kexInitReceived && guessIsWrong (kexInitKexSet kexInitReceived) (supportedKexSet kexAlgs))
+    (kexInitFirstKexPacketFollow kexInitReceived && guessIsWrong (kexInitKexSet kexInitReceived) supportedKexSet)
     (void $ recv [30 .. 49]) -- Discard the next packet
-  putStrLn $ "Received Kex Algorithm" ++ (show $ kexAlgorithms $ kexInitKexSet kexInitReceived)
-  putStrLn $ "Sent Kex Algorithm" ++ (show $ kexAlgorithms $ supportedKexSet kexAlgs)
-  let result = algorithmNegotiation $ fromRole role (supportedKexSet kexAlgs) (kexInitKexSet kexInitReceived)
+  let result = algorithmNegotiation $ fromRole role supportedKexSet (kexInitKexSet kexInitReceived)
   putStrLn $ "Received: " ++ show kexInitReceived
   putStrLn $ "Negotiated: " ++ show result
   let kexContext =
@@ -127,38 +102,45 @@ runKeyExchange role versions kexAlgs recv send
         , kexContextHostKeyEncoded = encodeRsaPubKey publicHostKey
         , kexContextSign =
             \toSign ->
-              sshEncode [SshString "ssh-rsa", SshString $ either (error . show) id $ sign Nothing (Just SHA1) privateHostKey toSign]
+              sshEncode
+                [SshString "ssh-rsa", SshString $ either (error . show) id $ sign Nothing (Just SHA1) privateHostKey toSign]
         }
-  keyAndExchange <- (runKex $ negotiatedKexAlgorithm result) role kexContext recv send
-  recv [0 .. 100]
-  return ()
+  (runKex $ negotiatedKexAlgorithm result) role kexContext recv send
   where
     guessIsWrong :: KexSet -> KexSet -> Bool
     guessIsWrong received sent =
       (head (kexAlgorithms received) /= head (kexAlgorithms sent)) ||
       (head (serverHostKeyAlgorithms received) /= head (serverHostKeyAlgorithms sent))
-    encodeRsaPubKey (PublicKey _ n e) = sshEncode [SshString "ssh-rsa", SshMPint e, SshMPint n]
+    encodeRsaPubKey (PublicKey _ n e) =
+      sshEncode [SshString "ssh-rsa", SshMPint e, SshMPint n]
+
+kexInitPacket :: SshPacketKexInit
+kexInitPacket = SshPacketKexInit newCookie supportedKexSet False
 
 data KexSet = KexSet
   { kexAlgorithms :: [KexAlgorithm]
   , serverHostKeyAlgorithms :: [HostKeyAlgorithm]
-  , encryptionAlgorithms :: SshDirectional [EncryptionAlgorithm]
-  , macAlgorithms :: SshDirectional [MacAlgorithm]
-  , compressionAlgorithms :: SshDirectional [CompressionAlgorithm]
-  , languages :: SshDirectional [Language]
+  , encryptionAlgorithmsClientToServer :: [EncryptionAlgorithm]
+  , encryptionAlgorithmsServerToClient :: [EncryptionAlgorithm]
+  , macAlgorithmsClientToServer :: [MacAlgorithm]
+  , macAlgorithmsServerToClient :: [MacAlgorithm]
+  , compressionAlgorithmsClientToServer :: [CompressionAlgorithm]
+  , compressionAlgorithmsServerToClient :: [CompressionAlgorithm]
+  , languagesClientToServer :: [Language]
+  , languagesServerToClient :: [Language]
   } deriving (Show)
-
-data NegotiatedProtocol = NegotiatedProtocol
-  { negotiatedEncryptionAlgorithm :: EncryptionAlgorithm
-  , negotiatedMacAlgorithm :: MacAlgorithm
-  , negotiatedCompressionAlgorithm :: CompressionAlgorithm
-  , negotiatedLanguage :: Maybe Language
-  }
 
 data NegotiatedAlgorithms = NegotiatedAlgorithms
   { negotiatedKexAlgorithm :: KexAlgorithm
   , negotiatedServerHostKeyAlgorithm :: HostKeyAlgorithm
-  , negotiatedProtocols :: SshDirectional NegotiatedProtocol
+  , negotiatedEncryptionAlgorithmClientToServer :: EncryptionAlgorithm
+  , negotiatedEncryptionAlgorithmServerToClient :: EncryptionAlgorithm
+  , negotiatedMacAlgorithmClientToServer :: MacAlgorithm
+  , negotiatedMacAlgorithmServerToClient :: MacAlgorithm
+  , negotiatedCompressionAlgorithmClientToServer :: CompressionAlgorithm
+  , negotiatedCompressionAlgorithmServerToClient :: CompressionAlgorithm
+  , negotiatedLanguageClientToServer :: Maybe Language
+  , negotiatedLanguageServerToClient :: Maybe Language
   } deriving (Show)
 
 newtype Cookie =
@@ -190,13 +172,11 @@ algorithmNegotiation ksClientServer =
   }
 
 -- TODO Check whether the algorithm and the host key needs signature-capable and encryption-cappable
-negotiateKexAlgorithm :: ([KexAlgorithm], [HostKeyAlgorithm]) -> SshClientServer [ByteString] -> SshClientServer [ByteString] -> KexAlgorithm
-negotiateKexAlgorithm (supportedKex, supportedHost) kexClientServer hostClientServer =
-  if head (clientData kexClientServer) == head (serverData kexClientServer) -- The guess
-    then fromJust $ find (\alg -> nameAsBytestring alg == head (clientData kexClientServer)) supportedKex
-    else findKexAlgorithm
-  where
-    findKexAlgorithm 
+negotiateKexAlgorithm :: SshClientServer KexSet -> KexAlgorithm
+negotiateKexAlgorithm ksClientServer =
+  if head (kexAlgorithms $ clientData ksClientServer) == head (kexAlgorithms $ serverData ksClientServer) -- The guess
+    then head $ kexAlgorithms $ clientData ksClientServer
+    else negotiateClientMatch kexAlgorithms "No key exchange algorithm" ksClientServer
 
 -- TODO Check whether the algorithm and the host key needs signature-capable and encryption-cappable
 negotiateHostKeyAlgorithm :: SshClientServer KexSet -> HostKeyAlgorithm
@@ -213,9 +193,11 @@ findFirst (x:xs) other =
     then Just x
     else findFirst xs other
 
+supportedKexAlgorithms = [findKexAlgorithm "diffie-hellman-group1-sha1", findKexAlgorithm "diffie-hellman-group14-sha1"]
+
 supportedKeyAlgorithms = [HostKeyAlgorithm "ssh-dss" True True, HostKeyAlgorithm "ssh-rsa" True True]
 
-supportedEncryptionAlgorithms = [EncryptionAlgorithm "aes128-cbc", EncryptionAlgorithm "3des-cbc"]
+supportedEncryptionAlgorithms = [EncryptionAlgorithm "aes128-ctr", EncryptionAlgorithm "3des-cbc"]
 
 supportedMacAlgorithms = [MacAlgorithm "hmac-sha1"]
 
@@ -223,22 +205,25 @@ supportedCompressionAlgorithms = [CompressionAlgorithm "none"]
 
 supportedLanguages = []
 
-supportedKexSet kexAlgs =
+supportedKexSet =
   KexSet
-  { kexAlgorithms = kexAlgs
+  { kexAlgorithms = supportedKexAlgorithms
   , serverHostKeyAlgorithms = supportedKeyAlgorithms
-  , encryptionAlgorithms = bothDirections supportedEncryptionAlgorithms
-  , macAlgorithms = bothDirections supportedMacAlgorithms
-  , compressionAlgorithms = bothDirections supportedCompressionAlgorithms
-  , languages = bothDirections supportedLanguages
+  , encryptionAlgorithmsClientToServer = supportedEncryptionAlgorithms
+  , encryptionAlgorithmsServerToClient = supportedEncryptionAlgorithms
+  , macAlgorithmsClientToServer = supportedMacAlgorithms
+  , macAlgorithmsServerToClient = supportedMacAlgorithms
+  , compressionAlgorithmsClientToServer = supportedCompressionAlgorithms
+  , compressionAlgorithmsServerToClient = supportedCompressionAlgorithms
+  , languagesClientToServer = supportedLanguages
+  , languagesServerToClient = supportedLanguages
   }
-
 
 readKexPacket :: Get SshPacketKexInit
 readKexPacket = do
   cookie <- fmap MkCookie (getByteString 16)
   kexSet <-
-    KexSet <$> getNameList id <*> getNameList findHostKeyAlgorithm <*> getNameList EncryptionAlgorithm <*>
+    KexSet <$> getNameList findKexAlgorithm <*> getNameList findHostKeyAlgorithm <*> getNameList EncryptionAlgorithm <*>
     getNameList EncryptionAlgorithm <*>
     getNameList MacAlgorithm <*>
     getNameList MacAlgorithm <*>
@@ -262,6 +247,16 @@ getBoolean = do
   if value == 0
     then return False
     else return True
+
+knownKexAlgorithms :: [(ByteString, KexAlgorithm)]
+knownKexAlgorithms =
+  [ (kexAlgorithmName diffieHellmanGroup1Sha1, diffieHellmanGroup1Sha1)
+  , (kexAlgorithmName diffieHellmanGroup14Sha1, diffieHellmanGroup14Sha1)
+  ]
+  where
+    buildEntry key req1 req2 req3 = (key, KexAlgorithm key req1 req2 req3)
+
+findKexAlgorithm key = fromMaybe (KexAlgorithm key True True undefined) (lookup key knownKexAlgorithms)
 
 knownHostKeyAlgorithms :: [(ByteString, HostKeyAlgorithm)]
 knownHostKeyAlgorithms = [buildEntry "ssh-dss" True True, buildEntry "ssh-rsa" True True]
