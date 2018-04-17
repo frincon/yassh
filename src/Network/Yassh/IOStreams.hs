@@ -24,10 +24,11 @@ import Network.Socket (PortNumber)
 import qualified Network.Yassh as Yassh
 import System.IO.Streams (InputStream, OutputStream)
 import qualified System.IO.Streams as Streams
+import qualified Crypto.PubKey.RSA as RSA
 
-runSshServer :: PortNumber -> ((InputStream ByteString, OutputStream ByteString) -> IO ()) -> IO ()
-runSshServer port shellIO =
-  Yassh.runSshServer port $ \(receive, send, sendErr) -> do
+runSshServer :: PortNumber -> RSA.PrivateKey -> ((InputStream ByteString, OutputStream ByteString) -> IO ()) -> IO ()
+runSshServer port rsaPrivateKey shellIO =
+  Yassh.runSshServer port rsaPrivateKey $ \(receive, send, sendErr) -> do
     is <- Streams.makeInputStream receive
     os <-
       Streams.makeOutputStream $ \maybeBytes ->

@@ -16,15 +16,52 @@
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import Network.Yassh.IOStreams
 import System.IO (BufferMode(NoBuffering), hSetBuffering, stdout)
 import System.IO.Streams (InputStream, OutputStream)
 import qualified System.IO.Streams as Streams
+import System.Directory (getXdgDirectory, XdgDirectory(XdgConfig), doesFileExist, createDirectoryIfMissing)
+import System.FilePath ((</>), takeDirectory)
+import qualified Crypto.PubKey.RSA as RSA
+import Network.Yassh.Utils.Format (decodePemDerRsaPrivateKey, encodePemDerRsaPrivateKey)
+
+programName = "yassh-server"
+rsaFileNamePriv = "host_rsa"
+-- rsaFileNamePub = "host_rsa.pub"
 
 main :: IO ()
 main = do
   hSetBuffering stdout NoBuffering
-  runSshServer 2022 dummyShell
+  configDirectory <- getXdgDirectory XdgConfig programName
+  hostKey <- readOrCreateKey $ configDirectory </> rsaFileNamePriv
+  runSshServer 2022 hostKey dummyShell
+
+readOrCreateKey :: FilePath -> IO RSA.PrivateKey
+readOrCreateKey rsaPrivFile = do
+  fileExists <- doesFileExist rsaPrivFile
+  if fileExists
+    then readRsaPrivFile rsaPrivFile
+    else do
+      putStrLn $ "File " ++ rsaPrivFile ++ " does not exists. Generating a new host key..."
+      (_, privateKey) <- RSA.generate 256 65537
+      print privateKey
+      saveRsaPrivFile privateKey rsaPrivFile
+      return privateKey
+
+readRsaPrivFile :: FilePath -> IO RSA.PrivateKey
+readRsaPrivFile rsaPrivFile = do
+  content <- BS.readFile rsaPrivFile
+  case decodePemDerRsaPrivateKey content of
+    Left err -> error $ "Reading file " ++ rsaPrivFile ++ " error: " ++ err
+    Right privKey -> do
+      print privKey
+      return privKey
+
+saveRsaPrivFile :: RSA.PrivateKey -> FilePath -> IO ()
+saveRsaPrivFile rsaPrivKey rsaPrivFile = do
+  createDirectoryIfMissing False (takeDirectory rsaPrivFile)
+  BS.writeFile rsaPrivFile $ encodePemDerRsaPrivateKey rsaPrivKey
 
 dummyShell :: (InputStream ByteString, OutputStream ByteString) -> IO ()
 dummyShell (is, os) = do

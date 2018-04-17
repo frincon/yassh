@@ -51,11 +51,14 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as LBS
+import qualified Data.ByteString.UTF8 as UTF8BS
+import Data.Char (isControl)
 import Data.Int
 import Data.Maybe (fromJust, fromMaybe, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
+import qualified Data.Text.IO as TIO
 import Data.Time.TimeSpan (TimeSpan, minutes, toMicroseconds)
 import Data.Version (showVersion)
 import Data.Word8 (Word8, _hyphen, _space)
@@ -66,12 +69,17 @@ import Network.Socket.ByteString (recv, sendAll)
 import Network.Yassh.Internal
 import Network.Yassh.Internal.ProtocolVersionExchange
        (runProtocolVersionExchange)
-import Network.Yassh.Internal.KeyExchange (runKeyExchange)
+import Network.Yassh.Internal.KeyExchange (runKeyExchangeServer)
 import Paths_yassh (version)
 import System.IO (hFlush, stdout)
 import System.IO.Streams (InputStream, OutputStream)
 import qualified System.IO.Streams as Streams
 import System.IO.Streams.Attoparsec.ByteString (parseFromStream)
+import qualified Crypto.PubKey.RSA as RSA
+import qualified Network.Yassh.HostKey.SshRsa as SshRsa
+import qualified Network.Yassh.KeyExchange.DiffieHellman as DiffieHellman
+import qualified Network.Yassh.HostKey as HostKey
+import qualified Network.Yassh.KeyExchange as KeyExchange
 
 import Data.Bits
 
@@ -81,7 +89,7 @@ defaultServerSettings :: SshSettings
 defaultServerSettings =
   MkSshSettings
   { sshSettingsOnProtocolVersionExchange = defaultOnProtocolVersionExchange
-  , sshSettingsOnReceiveBanner = mempty -- no banner from clients
+  , sshSettingsReceiveBanner = undefined -- no banner from clients
   , sshSettingsProtocolVersionExchangeSizeLimitBytes = defaultProtocolVersionExchangeSizeLimitBytes
   , sshSettingsIgnoreInterval = defaultIgnoreInterval
   , sshSettingsVersion = defaultVersion
@@ -91,11 +99,26 @@ defaultClientSettings :: SshSettings
 defaultClientSettings =
   MkSshSettings
   { sshSettingsOnProtocolVersionExchange = defaultOnProtocolVersionExchange
-  , sshSettingsOnReceiveBanner = BS.putStr -- print banner to stdout
+  , sshSettingsReceiveBanner = defaultClientReceiveBanner -- print banner to stdout
   , sshSettingsProtocolVersionExchangeSizeLimitBytes = maxBound -- TODO It can blow up the memory as the reading is full before call to OnReceiveBanner
   , sshSettingsIgnoreInterval = defaultIgnoreInterval
   , sshSettingsVersion = defaultVersion
   }
+
+defaultClientReceiveBanner :: InputStream ByteString -> IO ()
+defaultClientReceiveBanner is = do
+  putStrLn "----------------------- Banner from the server:"
+  textInputStream <- Streams.decodeUtf8With defaultError is
+  Streams.foldM (\_ t -> TIO.putStr $ T.map mapControlChars t) () textInputStream
+  putStrLn "----------------------- End of banner from the server"
+  where
+    defaultError _ _ = Just '\xfffd'
+
+    mapControlChars c = 
+      if isControl c && c /= '\n' && c /= '\r' && c /= '\t'
+        then '\xfffd'
+        else c
+
 
 defaultVersion :: SshVersion
 defaultVersion = SshVersion "2.0" (BS.concat [libraryName, "-", C8.pack $ showVersion version]) Nothing
@@ -115,31 +138,29 @@ type Shell = ((IO (Maybe ByteString), ByteString -> IO (), ByteString -> IO ()) 
 runSshClient :: (MonadIO m, MonadMask m) => String -> SshAction m r -> m r
 runSshClient hostName program = connect hostName "22" (runSshClientConnection program defaultClientSettings)
 
-runSshServer :: PortNumber -> Shell -> IO ()
-runSshServer port shell = serve "*" (show port) (runSecure . runSshServerConnection shell defaultServerSettings)
+runSshServer :: PortNumber -> RSA.PrivateKey -> Shell -> IO ()
+runSshServer port rsaPrivKey shell = serve "*" (show port) (runSecure . runSshServerConnection rsaPrivKey shell defaultServerSettings)
 
 runSecure :: IO () -> IO ()
 runSecure program = catch program (\e -> print (e :: SomeException))
 
 -- TODO Shell should be part of the settings
-runSshServerConnection :: MonadIO m => Shell -> SshSettings -> (Socket, SockAddr) -> m ()
-runSshServerConnection shell settings (connectionSocket, sockAddr) = do
-  context <- initializeConnection settings SshRoleServer connectionSocket
+runSshServerConnection :: MonadIO m => RSA.PrivateKey -> Shell -> SshSettings -> (Socket, SockAddr) -> m ()
+runSshServerConnection rsaPrivKey shell settings (connectionSocket, sockAddr) = do
+  context <- initializeConnection rsaPrivKey settings SshRoleServer connectionSocket
   -- TODO Run the shell
   return ()
 
 runSshClientConnection :: MonadIO m => SshAction m r -> SshSettings -> (Socket, SockAddr) -> m r
-runSshClientConnection program settings (connectionSocket, sockAddr) = do
-  context <- initializeConnection settings SshRoleClient connectionSocket
-  runReaderT program context
+runSshClientConnection program settings (connectionSocket, sockAddr) = $notImplemented
 
-initializeConnection :: MonadIO m => SshSettings -> SshRole -> Socket -> m SshContext
-initializeConnection settings role socket = do
+initializeConnection :: MonadIO m => RSA.PrivateKey -> SshSettings -> SshRole -> Socket -> m SshContext
+initializeConnection rsaPrivKey settings role socket = do
   streams <- liftIO $ Streams.socketToStreams socket
   version <- protocolExchange streams settings role
   packetStreams <- liftIO $ createPacketStreams streams
   let context = MkSshContext role streams settings version packetStreams
-  runReaderT runFirstKeyExchange context
+  runReaderT (runFirstKeyExchange [SshRsa.new $ SshRsa.Configuration rsaPrivKey] [DiffieHellman.diffieHellmanGroup14Sha1]) context
 
 protocolExchange :: MonadIO m => (InputStream ByteString, OutputStream ByteString) -> SshSettings -> SshRole -> m SshVersion
 protocolExchange (is, os) settings role = do
@@ -149,16 +170,17 @@ protocolExchange (is, os) settings role = do
   return sshVersion
 
 -- until here is ok TODO Refactor from here
-runFirstKeyExchange :: MonadIO m => ReaderT SshContext m SshContext
-runFirstKeyExchange = do
+runFirstKeyExchange :: MonadIO m => [HostKey.ServerHandle] -> [KeyExchange.ServerHandle] -> ReaderT SshContext m SshContext
+runFirstKeyExchange hostKeyHandles keyExchangeHandles = do
   (is, os) <- asks sshContextPacketStreams
   role <- asks sshContextRole
   settings <- asks sshContextSettings
   peerVersion <- asks sshContextPeerVersion
   result <-
     liftIO $
-    runKeyExchange
-      role
+    runKeyExchangeServer
+      hostKeyHandles
+      keyExchangeHandles
       (fromRole role (sshSettingsVersion settings) (peerVersion))
       (receivePacket is)
       (\p -> (putStrLn "Sending packet" >> (Streams.writeTo os $ Just p)))
@@ -261,9 +283,9 @@ sshPacketToByteString' payload =
   LBS.toChunks $
   LBS.concat -- TODO Not very efficient
     [ runPut $ putWord32be $ fromIntegral paketLength
-    , runPut $ putWord8 $ fromIntegral paddingLength
+    , runPut $ putWord8 $ fromIntegral (paddingLength 8) -- TODO BlockSize
     , payload
-    , LBS.replicate (fromIntegral paddingLength) 0 -- TODO Use Random
+    , LBS.replicate (fromIntegral (paddingLength 8)) 0 -- TODO Use Random
     ]
   where
     payloadLength :: Int64
@@ -272,10 +294,12 @@ sshPacketToByteString' payload =
     paketLengthFieldLength = 4 :: Int64
     paddingLengthFieldLength :: Int64
     paddingLengthFieldLength = 1 :: Int64
-    paddingLength :: Int64
-    paddingLength = 8 - ((payloadLength + paketLengthFieldLength + paddingLengthFieldLength) `mod` 8)
+    paddingLength :: Int64 -> Int64
+    paddingLength blockSize = if multiplePaddingLength blockSize < 4 then blockSize + multiplePaddingLength blockSize else multiplePaddingLength blockSize
+    multiplePaddingLength :: Int64 -> Int64
+    multiplePaddingLength blockSize = blockSize - ((payloadLength + paketLengthFieldLength + paddingLengthFieldLength) `mod` blockSize)
     paketLength :: Int64
-    paketLength = paddingLengthFieldLength + payloadLength + paddingLength
+    paketLength = paddingLengthFieldLength + payloadLength + paddingLength 8
 
 -- Until here is not checked
 protocolTransportLayerGeneric = [1 .. 19]

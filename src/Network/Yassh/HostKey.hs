@@ -1,4 +1,4 @@
--- Copyright 2017 Fernando Rincon Martin
+-- Copyright 2018 Fernando Rincon Martin
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
@@ -11,31 +11,35 @@
 -- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE OverloadedStrings #-}
-module Network.Yassh.KeyExchange
-  ( KexServerContext(..)
-  , ServerHandle(..)
-  ) where
+module Network.Yassh.HostKey
+  ( ServerHandle(..)
+  , Sign
+  , Encrypt
+  , isEncryptionCapable
+  , isSignatureCapable
+  )
+where
 
 import Data.ByteString (ByteString)
 import Data.ByteString.Char8 (unpack)
 import Network.Yassh.Internal
-import qualified Network.Yassh.HostKey as HostKey
-import Data.Word (Word8)
+import Data.Maybe (isJust)
 
-data KexServerContext = KexContext
-  { kexContextIdentificationString :: SshClientServer ByteString
-  , kexContextMsgInit :: SshClientServer SshRawPacket
-  , kexContextHostKeyHandle :: HostKey.ServerHandle
-  }
+type Sign = ByteString -> ByteString
+type Encrypt = ByteString -> ByteString
 
 data ServerHandle = ServerHandle
   { name :: ByteString
-  , requiresHostKeyEncryptionCapable :: Bool
-  , requiresHostKeySignatureCapable :: Bool
-  , runKex :: KexServerContext -> ([Word8] -> IO SshRawPacket) -> (SshPacket -> IO ()) -> IO ()
+  , sign :: Maybe Sign
+  , encrypt :: Maybe Encrypt
+  , encodedKey :: ByteString
   }
 
+isEncryptionCapable :: ServerHandle -> Bool
+isEncryptionCapable = isJust . encrypt
+
+isSignatureCapable :: ServerHandle -> Bool
+isSignatureCapable = isJust . sign
+
 instance Show ServerHandle where
-  show handle = "KeyExchange.ServerHandle { name = " ++ unpack (name handle) ++"}"
+  show handle = "HostKey.ServerHandle { name = " ++ unpack (name handle) ++"}"

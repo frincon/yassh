@@ -16,10 +16,6 @@
 
 module Network.Yassh.Internal.ProtocolVersionExchange
   ( runProtocolVersionExchange
-  -- TODO Those are for testing, refactor testing to not have to go to this
-  -- detailed functions
-  , bannerLines
-  , receiveBanner
   ) where
 
 import Network.Yassh.Internal
@@ -33,8 +29,11 @@ import Data.Attoparsec.ByteString
 import Data.Attoparsec.Combinator (lookAhead)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
+import qualified Data.ByteString.Lazy.Internal as ILBS
 import qualified Data.ByteString.Char8 as C8
 import Data.Version (showVersion)
+import System.IO.Unsafe (unsafeInterleaveIO)
 
 import Data.Maybe (fromMaybe)
 import System.IO.Streams (InputStream, OutputStream)
@@ -53,24 +52,55 @@ runProtocolVersionExchange (is, os) role settings =
 receiveIdentificationString :: InputStream ByteString -> SshRole -> SshSettings -> IO SshVersion
 receiveIdentificationString is role settings = do
   case role of
-    SshRoleClient -> do
-      banner <- receiveBanner is
-      sshSettingsOnReceiveBanner settings banner
-    SshRoleServer -> return ()
+    SshRoleClient -> receiveBanner is (sshSettingsReceiveBanner settings)
+    SshRoleServer -> mempty
   receiveAndCheckIdentificationString is
 
 -- TODO Use SshVersion to output as well
 sendIdentificationString :: SshVersion -> OutputStream ByteString -> IO ()
 sendIdentificationString sshVersion = Streams.write (Just $ BS.append (toIdentificationString sshVersion) "\r\n")
 
-receiveBanner :: InputStream ByteString -> IO ByteString
-receiveBanner = parseFromStream bannerLines
+receiveBanner :: InputStream ByteString -> (InputStream ByteString -> IO ())-> IO ()
+receiveBanner is consumer = do
+  newInputStream <- Streams.makeInputStream go
+  consumer newInputStream
+  Streams.skipToEof newInputStream
+  where
 
-bannerLines :: Parser ByteString
-bannerLines =
-  lookAhead (string "SSH-") *> return "" <|> do
-    banner <- BS.pack <$> manyTill anyWord8 (string "\r\n" *> lookAhead (string "SSH-"))
-    return $ BS.append banner "\r\n"
+    -- TODO Not Very efficient
+    go :: IO (Maybe ByteString)
+    go = do
+      next <- readUnless 4 BS.empty
+      if BS.take 4 next == "SSH-"
+        then do
+          Streams.unRead next is
+          return Nothing
+        else do
+          let (banner, rest) = BS.breakSubstring "\r\n" next
+          if BS.null rest 
+            then do
+              let (newBanner, newRest) = BS.splitAt (BS.length banner - 1) banner
+              Streams.unRead newRest is
+              return $ Just newBanner
+            else do
+              let (theHead, theTail) = BS.splitAt 2 rest
+              Streams.unRead theTail is
+              return $ Just (BS.append banner theHead)
+
+    safeRead :: IO ByteString
+    safeRead = do
+      maybeNext <- Streams.read is
+      case maybeNext of
+        Nothing -> error "receiveBanner: end of stream"
+        Just next -> return next
+
+    readUnless :: Int -> ByteString -> IO ByteString
+    readUnless minRead accum =
+      if BS.length accum < minRead
+        then do
+          nextData <- safeRead
+          readUnless minRead (BS.append accum nextData)
+        else return accum
 
 receiveAndCheckIdentificationString :: InputStream ByteString -> IO SshVersion
 receiveAndCheckIdentificationString is = do
