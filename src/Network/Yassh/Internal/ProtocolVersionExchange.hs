@@ -29,9 +29,9 @@ import Data.Attoparsec.ByteString
 import Data.Attoparsec.Combinator (lookAhead)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.Internal as ILBS
-import qualified Data.ByteString.Char8 as C8
 import Data.Version (showVersion)
 import System.IO.Unsafe (unsafeInterleaveIO)
 
@@ -60,14 +60,13 @@ receiveIdentificationString is role settings = do
 sendIdentificationString :: SshVersion -> OutputStream ByteString -> IO ()
 sendIdentificationString sshVersion = Streams.write (Just $ BS.append (toIdentificationString sshVersion) "\r\n")
 
-receiveBanner :: InputStream ByteString -> (InputStream ByteString -> IO ())-> IO ()
+receiveBanner :: InputStream ByteString -> (InputStream ByteString -> IO ()) -> IO ()
 receiveBanner is consumer = do
   newInputStream <- Streams.makeInputStream go
   consumer newInputStream
   Streams.skipToEof newInputStream
-  where
-
     -- TODO Not Very efficient
+  where
     go :: IO (Maybe ByteString)
     go = do
       next <- readUnless 4 BS.empty
@@ -77,7 +76,7 @@ receiveBanner is consumer = do
           return Nothing
         else do
           let (banner, rest) = BS.breakSubstring "\r\n" next
-          if BS.null rest 
+          if BS.null rest
             then do
               let (newBanner, newRest) = BS.splitAt (BS.length banner - 1) banner
               Streams.unRead newRest is
@@ -86,14 +85,12 @@ receiveBanner is consumer = do
               let (theHead, theTail) = BS.splitAt 2 rest
               Streams.unRead theTail is
               return $ Just (BS.append banner theHead)
-
     safeRead :: IO ByteString
     safeRead = do
       maybeNext <- Streams.read is
       case maybeNext of
         Nothing -> error "receiveBanner: end of stream"
         Just next -> return next
-
     readUnless :: Int -> ByteString -> IO ByteString
     readUnless minRead accum =
       if BS.length accum < minRead

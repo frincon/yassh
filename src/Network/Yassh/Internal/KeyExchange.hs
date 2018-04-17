@@ -13,51 +13,53 @@
 -- limitations under the License.
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
+
 module Network.Yassh.Internal.KeyExchange
   ( runKeyExchangeServer
   ) where
 
-import Data.Function (on)
 import Control.Monad (void, when)
 import Crypto.Hash
+import Data.Function (on)
+
+import Crypto.Hash
+import Crypto.Number.Serialize
+import Crypto.PubKey.DH
 -- import Crypto.PubKey.RSA
 -- import Crypto.PubKey.RSA.PKCS15
 import Data.Binary.Get
        (Get, getByteString, getInt32be, getRemainingLazyByteString,
         getWord32be, getWord8, runGet, runGetIncremental)
-import Data.ByteArray (convert)
-import Data.ByteString (ByteString)
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Char8 as C8
-import qualified Data.ByteString.Lazy as LBS
-import Data.Either (either)
-import Data.Maybe (maybe, isJust, fromMaybe, catMaybes)
-import Data.Proxy (Proxy(Proxy))
-import Data.Word8 (Word8)
-import Development.Placeholders
-import Network.Yassh.Internal
-import Crypto.Hash
-import Crypto.Number.Serialize
-import Crypto.PubKey.DH
 import Data.Binary.Get
        (Get, getByteString, getInt32be, getRemainingLazyByteString,
         getWord32be, getWord8, runGet, runGetIncremental)
 import Data.ByteArray (convert)
+import Data.ByteArray (convert)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as LBS
+import qualified Data.ByteString.Lazy as LBS
+import Data.Either (either)
+import Data.List (find)
+import Data.Maybe (catMaybes, fromMaybe, isJust, maybe)
+import Data.Proxy (Proxy(Proxy))
 import Data.Proxy (Proxy(Proxy))
 import Data.Word (Word8)
+import Data.Word8 (Word8)
 import Development.Placeholders
-import Data.List (find)
+import Development.Placeholders
 import qualified Network.Yassh.HostKey as HostKey
+import Network.Yassh.Internal
 import qualified Network.Yassh.KeyExchange as KeyExchange
 
 newtype Cookie =
   MkCookie ByteString
   deriving (Show)
 
-data NegotiationSet = NegotiationSet 
+data NegotiationSet = NegotiationSet
   { kexAlgs :: [ByteString]
   , serverHostKeyAlgs :: [ByteString]
   , encryptionAlgs :: BiDirectional [ByteString]
@@ -66,7 +68,7 @@ data NegotiationSet = NegotiationSet
   , languages :: BiDirectional [ByteString]
   }
 
-data BiDirectional a = BiDirectional 
+data BiDirectional a = BiDirectional
   { clientToServer :: a
   , serverToClient :: a
   }
@@ -96,32 +98,48 @@ mkSshPacketKexInit (MkCookie cookieBytes) negotiationSet =
     ]
 
 tempEncryptionAlgs = ["aes128-ctr", "3des-cbc"] :: [ByteString]
+
 tempMacAlgs = ["hmac-sha1"]
+
 tempCompressionAlgs = ["none"]
+
 tempLanguages = []
 
-runKeyExchangeServer :: [HostKey.ServerHandle] -> [KeyExchange.ServerHandle] -> SshClientServer SshVersion -> ([Word8] -> IO SshRawPacket) -> (SshPacket -> IO ()) -> IO ()
+runKeyExchangeServer ::
+     [HostKey.ServerHandle]
+  -> [KeyExchange.ServerHandle]
+  -> SshClientServer SshVersion
+  -> ([Word8] -> IO SshRawPacket)
+  -> (SshPacket -> IO ())
+  -> IO ()
 runKeyExchangeServer hostKeyHandlers keyExchangeHandles versions recv send = do
   putStrLn "Running key exchange"
   (hostKeyHandle, keyExchangeHandle, msgInit) <- doAlgorithmNegotiation hostKeyHandlers keyExchangeHandles recv send
-  let kexContext = KeyExchange.KexContext { KeyExchange.kexContextIdentificationString = fmap toIdentificationString versions
-    , KeyExchange.kexContextMsgInit = msgInit
-    , KeyExchange.kexContextHostKeyHandle = hostKeyHandle
-    }
+  let kexContext =
+        KeyExchange.KexContext
+        { KeyExchange.kexContextIdentificationString = fmap toIdentificationString versions
+        , KeyExchange.kexContextMsgInit = msgInit
+        , KeyExchange.kexContextHostKeyHandle = hostKeyHandle
+        }
   KeyExchange.runKex keyExchangeHandle kexContext recv send
 
-doAlgorithmNegotiation ::  [HostKey.ServerHandle] -> [KeyExchange.ServerHandle] -> ([Word8] -> IO SshRawPacket) -> (SshPacket -> IO ()) -> IO (HostKey.ServerHandle, KeyExchange.ServerHandle, SshClientServer SshRawPacket)
+doAlgorithmNegotiation ::
+     [HostKey.ServerHandle]
+  -> [KeyExchange.ServerHandle]
+  -> ([Word8] -> IO SshRawPacket)
+  -> (SshPacket -> IO ())
+  -> IO (HostKey.ServerHandle, KeyExchange.ServerHandle, SshClientServer SshRawPacket)
 doAlgorithmNegotiation hostKeyHandles keyExchangeHandles recv send = do
   putStrLn "Starting Algorithm Negotiation"
-  let ourNegotiationSet = buildNegotiationSet 
+  let ourNegotiationSet = buildNegotiationSet
   kexInitRawPacketSent <- sendSshMsgKexInit ourNegotiationSet
   (kexInitRawPacketReceived, theirNegotiationSet, followingPacket) <- receiveSshMsgKexInit
   discardFollowingPacketWhenGuessIsWrong followingPacket ourNegotiationSet theirNegotiationSet
   let result = negotiateAlgorithms ourNegotiationSet theirNegotiationSet
   putStrLn $ "Result: " ++ show result
-  maybe (error "No algorithm found") return $ fmap (\(a,b) -> (a,b, SshClientServer kexInitRawPacketReceived kexInitRawPacketSent)) result
+  maybe (error "No algorithm found") return $
+    fmap (\(a, b) -> (a, b, SshClientServer kexInitRawPacketReceived kexInitRawPacketSent)) result
   where
-
     buildNegotiationSet :: NegotiationSet
     buildNegotiationSet =
       NegotiationSet
@@ -132,31 +150,26 @@ doAlgorithmNegotiation hostKeyHandles keyExchangeHandles recv send = do
       , compressionAlgs = BiDirectional tempCompressionAlgs tempCompressionAlgs
       , languages = BiDirectional tempLanguages tempLanguages
       }
-
     guessIsWrong :: NegotiationSet -> NegotiationSet -> Bool
-    guessIsWrong ourNegotiationSet theirNegotiationSet =
-      head (kexAlgs ourNegotiationSet) /= head (kexAlgs theirNegotiationSet)
-
+    guessIsWrong ourNegotiationSet theirNegotiationSet = head (kexAlgs ourNegotiationSet) /= head (kexAlgs theirNegotiationSet)
     sendSshMsgKexInit :: NegotiationSet -> IO SshRawPacket
     sendSshMsgKexInit negotiationSet = do
       let kexInitPacket = mkSshPacketKexInit newCookie negotiationSet
       send kexInitPacket
       putStrLn "SSH_MSG_KEXINIT Sent"
       return $ toSshRawPacket kexInitPacket
-
     receiveSshMsgKexInit :: IO (SshRawPacket, NegotiationSet, Bool)
     receiveSshMsgKexInit = do
       kexInitRawPacketReceived <- recv [c_SSH_MSG_KEXINIT]
       let (_, theirNegotiationSet, followingPacket) = readKexInitPacket kexInitRawPacketReceived
       putStrLn "SSH_MSG_KEXINIT Received"
       return (kexInitRawPacketReceived, theirNegotiationSet, followingPacket)
-
     discardFollowingPacketWhenGuessIsWrong :: Bool -> NegotiationSet -> NegotiationSet -> IO ()
     discardFollowingPacketWhenGuessIsWrong followingPacket ourNegotiationSet theirNegotiationSet =
-      when (followingPacket && guessIsWrong ourNegotiationSet theirNegotiationSet)
+      when
+        (followingPacket && guessIsWrong ourNegotiationSet theirNegotiationSet)
         (void $ recv [30 .. 49]) -- Discard the next packet
-
-    negotiateAlgorithms ::  NegotiationSet -> NegotiationSet -> Maybe (HostKey.ServerHandle, KeyExchange.ServerHandle)
+    negotiateAlgorithms :: NegotiationSet -> NegotiationSet -> Maybe (HostKey.ServerHandle, KeyExchange.ServerHandle)
     negotiateAlgorithms serverNegotiationSet clientNegotiationSet = do
       keyExchangeHandle <-
         if guessIsWrong serverNegotiationSet clientNegotiationSet
@@ -164,23 +177,23 @@ doAlgorithmNegotiation hostKeyHandles keyExchangeHandles recv send = do
           else find (\handle -> KeyExchange.name handle == head (kexAlgs serverNegotiationSet)) keyExchangeHandles
       hostKeyHandle <- negotiateHostKeyAlgorithm clientNegotiationSet keyExchangeHandle
       return (hostKeyHandle, keyExchangeHandle)
-
     negotiateKexAlgorithm :: NegotiationSet -> Maybe KeyExchange.ServerHandle
-    negotiateKexAlgorithm clientNegotiationSet = 
-      let supportedKexHandles = catMaybes $ fmap (\name -> find (\handle -> KeyExchange.name handle == name) keyExchangeHandles) (kexAlgs clientNegotiationSet)
-      in
-        find (isJust . negotiateHostKeyAlgorithm clientNegotiationSet) supportedKexHandles
-
+    negotiateKexAlgorithm clientNegotiationSet =
+      let supportedKexHandles =
+            catMaybes $
+            fmap (\name -> find (\handle -> KeyExchange.name handle == name) keyExchangeHandles) (kexAlgs clientNegotiationSet)
+      in find (isJust . negotiateHostKeyAlgorithm clientNegotiationSet) supportedKexHandles
     negotiateHostKeyAlgorithm :: NegotiationSet -> KeyExchange.ServerHandle -> Maybe HostKey.ServerHandle
-    negotiateHostKeyAlgorithm clientNegotiationSet kexHandle = 
-      let supportedHostKeyHandles = catMaybes $ fmap (\name -> find (\handle -> HostKey.name handle == name) hostKeyHandles) (serverHostKeyAlgs clientNegotiationSet)
-      in
-        find isValidKexAlgorithm supportedHostKeyHandles
-        where
-          isValidKexAlgorithm :: HostKey.ServerHandle -> Bool
-          isValidKexAlgorithm hostKeyHandle = 
-            (not (KeyExchange.requiresHostKeyEncryptionCapable kexHandle) || isJust  (HostKey.encrypt hostKeyHandle)) &&
-            (not (KeyExchange.requiresHostKeySignatureCapable kexHandle) || isJust (HostKey.sign hostKeyHandle))
+    negotiateHostKeyAlgorithm clientNegotiationSet kexHandle =
+      let supportedHostKeyHandles =
+            catMaybes $
+            fmap (\name -> find (\handle -> HostKey.name handle == name) hostKeyHandles) (serverHostKeyAlgs clientNegotiationSet)
+      in find isValidKexAlgorithm supportedHostKeyHandles
+      where
+        isValidKexAlgorithm :: HostKey.ServerHandle -> Bool
+        isValidKexAlgorithm hostKeyHandle =
+          (not (KeyExchange.requiresHostKeyEncryptionCapable kexHandle) || isJust (HostKey.encrypt hostKeyHandle)) &&
+          (not (KeyExchange.requiresHostKeySignatureCapable kexHandle) || isJust (HostKey.sign hostKeyHandle))
 
 findFirst :: (a -> Bool) -> [a] -> Maybe a
 findFirst _ [] = Nothing
@@ -193,10 +206,8 @@ exists :: (a -> Bool) -> [a] -> Bool
 exists cond list = isJust $ find cond list
 
 readKexInitPacket :: SshRawPacket -> (Cookie, NegotiationSet, Bool)
-readKexInitPacket packet = 
-  runGet readNegotiationGet $ LBS.fromStrict $ sshRawPacketPayload packet
+readKexInitPacket packet = runGet readNegotiationGet $ LBS.fromStrict $ sshRawPacketPayload packet
   where
-    
     readNegotiationGet :: Get (Cookie, NegotiationSet, Bool)
     readNegotiationGet = do
       cookie <- fmap MkCookie (getByteString 16)
@@ -212,14 +223,10 @@ readKexInitPacket packet =
       list10 <- getNameList
       firstKexPacketFollows <- getBoolean
       getInt32be -- the last uint32 ignored
-      let negotiationSet = NegotiationSet
-                            { kexAlgs = list1
-                            , serverHostKeyAlgs = list2
-                            , encryptionAlgs = BiDirectional list3 list4
-                            }
+      let negotiationSet = NegotiationSet {kexAlgs = list1, serverHostKeyAlgs = list2, encryptionAlgs = BiDirectional list3 list4}
       return (cookie, negotiationSet, firstKexPacketFollows)
 
-getNameList ::  Get [ByteString]
+getNameList :: Get [ByteString]
 getNameList = do
   nameListLength <- fmap fromIntegral getWord32be
   listWithCommas <- getByteString nameListLength

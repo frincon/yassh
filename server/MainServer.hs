@@ -14,22 +14,26 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
 
+import qualified Crypto.PubKey.RSA as RSA
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Network.Yassh.IOStreams
+import Network.Yassh.Utils.Format
+       (decodePemDerRsaPrivateKey, encodePemDerRsaPrivateKey)
+import System.Directory
+       (XdgDirectory(XdgConfig), createDirectoryIfMissing, doesFileExist,
+        getXdgDirectory)
+import System.FilePath ((</>), takeDirectory)
 import System.IO (BufferMode(NoBuffering), hSetBuffering, stdout)
 import System.IO.Streams (InputStream, OutputStream)
 import qualified System.IO.Streams as Streams
-import System.Directory (getXdgDirectory, XdgDirectory(XdgConfig), doesFileExist, createDirectoryIfMissing)
-import System.FilePath ((</>), takeDirectory)
-import qualified Crypto.PubKey.RSA as RSA
-import Network.Yassh.Utils.Format (decodePemDerRsaPrivateKey, encodePemDerRsaPrivateKey)
 
 programName = "yassh-server"
-rsaFileNamePriv = "host_rsa"
--- rsaFileNamePub = "host_rsa.pub"
 
+rsaFileNamePriv = "host_rsa"
+
+-- rsaFileNamePub = "host_rsa.pub"
 main :: IO ()
 main = do
   hSetBuffering stdout NoBuffering

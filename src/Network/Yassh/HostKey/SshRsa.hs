@@ -1,25 +1,26 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE OverloadedStrings #-}
+
 module Network.Yassh.HostKey.SshRsa
   ( Configuration(..)
   , ServerHandle(..)
   , new
-  )
-where
+  ) where
 
+import Crypto.Hash (SHA1(..))
 import Crypto.PubKey.RSA
 import Crypto.PubKey.RSA.PKCS15
-import Crypto.Hash (SHA1(..))
+import GHC.Stack
 import Network.Yassh.HostKey
 import Network.Yassh.Internal
-import GHC.Stack
 
 data Configuration = Configuration
   { privateKey :: PrivateKey
   }
 
 new :: Configuration -> ServerHandle
-new Configuration{..} = ServerHandle
+new Configuration {..} =
+  ServerHandle
   { name = "ssh-rsa"
   , sign = Just $ privateSign privateKey
   , encrypt = Nothing -- TODO It is encryption capable
@@ -32,6 +33,4 @@ new Configuration{..} = ServerHandle
 privateSign :: HasCallStack => PrivateKey -> Sign
 privateSign privateKey input =
   sshEncode
-    [ SshString "ssh-rsa"
-    , SshString $ either (error . show) id $ Crypto.PubKey.RSA.PKCS15.sign Nothing (Just SHA1) privateKey input
-    ]
+    [SshString "ssh-rsa", SshString $ either (error . show) id $ Crypto.PubKey.RSA.PKCS15.sign Nothing (Just SHA1) privateKey input]

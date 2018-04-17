@@ -1,10 +1,10 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
+
 module Network.Yassh.KeyExchange.DiffieHellman
   ( diffieHellmanGroup1Sha1
   , diffieHellmanGroup14Sha1
-  )
-where
+  ) where
 
 import Crypto.Hash
 import Crypto.Number.Serialize
@@ -16,13 +16,13 @@ import Data.ByteArray (convert)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
+import Data.Maybe (fromJust)
 import Data.Proxy (Proxy(Proxy))
 import Data.Word (Word8)
 import Development.Placeholders
+import qualified Network.Yassh.HostKey as HostKey
 import Network.Yassh.Internal
 import Network.Yassh.KeyExchange
-import Data.Maybe (fromJust)
-import qualified Network.Yassh.HostKey as HostKey
 
 data SshPacketKexdhInit = SshPacketKexdhInit
   { kexdhInitClientValue :: PublicNumber
@@ -45,7 +45,8 @@ instance ToSshPacket SshPacketKexdhReply where
                                   } = SshPacket c_SSH_MSG_KEXDH_REPLY [SshString hostKey, SshMPint serverValue, SshString signature]
 
 diffieHellmanGroup1Sha1 :: ServerHandle
-diffieHellmanGroup1Sha1 = ServerHandle
+diffieHellmanGroup1Sha1 =
+  ServerHandle
   { name = "diffie-hellman-group1-sha1"
   , requiresHostKeyEncryptionCapable = False
   , requiresHostKeySignatureCapable = True
@@ -53,7 +54,8 @@ diffieHellmanGroup1Sha1 = ServerHandle
   }
 
 diffieHellmanGroup14Sha1 :: ServerHandle
-diffieHellmanGroup14Sha1 = ServerHandle
+diffieHellmanGroup14Sha1 =
+  ServerHandle
   { name = "diffie-hellman-group14-sha1"
   , requiresHostKeyEncryptionCapable = False
   , requiresHostKeySignatureCapable = True

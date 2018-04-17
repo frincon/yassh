@@ -17,15 +17,15 @@ module Network.Yassh.HostKey
   , Encrypt
   , isEncryptionCapable
   , isSignatureCapable
-  )
-where
+  ) where
 
 import Data.ByteString (ByteString)
 import Data.ByteString.Char8 (unpack)
-import Network.Yassh.Internal
 import Data.Maybe (isJust)
+import Network.Yassh.Internal
 
 type Sign = ByteString -> ByteString
+
 type Encrypt = ByteString -> ByteString
 
 data ServerHandle = ServerHandle
@@ -42,4 +42,4 @@ isSignatureCapable :: ServerHandle -> Bool
 isSignatureCapable = isJust . sign
 
 instance Show ServerHandle where
-  show handle = "HostKey.ServerHandle { name = " ++ unpack (name handle) ++"}"
+  show handle = "HostKey.ServerHandle { name = " ++ unpack (name handle) ++ "}"

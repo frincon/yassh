@@ -25,12 +25,10 @@ import qualified System.IO.Streams as Streams
 import System.IO.Streams.ByteString (fromByteString)
 import Test.Hspec
 
-
 -- TODO Make a memory test for large banners
-
 main :: IO ()
 main =
-  hspec $ do
+  hspec $
     {- 
     describe "Network.Yassh.bannerLines" $ do
       it "Returns nothing when the line start with SSH-" $ do parseOnly bannerLines "SSH-PEpito" `shouldBe` Right ""
@@ -55,6 +53,7 @@ main =
         is <- liftIO $ Streams.fromList ["Banner1\r\n", "Bann", "er2\r\nOther Banner"]
         receiveBanner is `shouldThrow` anyException -- TODO make it explicit
     -}
+   do
     describe "Network.Yassh.runProtocolVersionExchange" $ do
       it "Should fail if the stream is bigger then protocolExchangeLimitBytes" $ do
         is <- liftIO $ Streams.fromByteString $ BC.append (BC.replicate 1024 'a') "\r\nSSH-Pepito"

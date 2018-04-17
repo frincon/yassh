@@ -13,6 +13,7 @@
 -- limitations under the License.
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
+
 module Network.Yassh.KeyExchange
   ( KexServerContext(..)
   , ServerHandle(..)
@@ -20,9 +21,9 @@ module Network.Yassh.KeyExchange
 
 import Data.ByteString (ByteString)
 import Data.ByteString.Char8 (unpack)
-import Network.Yassh.Internal
-import qualified Network.Yassh.HostKey as HostKey
 import Data.Word (Word8)
+import qualified Network.Yassh.HostKey as HostKey
+import Network.Yassh.Internal
 
 data KexServerContext = KexContext
   { kexContextIdentificationString :: SshClientServer ByteString
@@ -38,4 +39,4 @@ data ServerHandle = ServerHandle
   }
 
 instance Show ServerHandle where
-  show handle = "KeyExchange.ServerHandle { name = " ++ unpack (name handle) ++"}"
+  show handle = "KeyExchange.ServerHandle { name = " ++ unpack (name handle) ++ "}"

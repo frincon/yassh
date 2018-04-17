@@ -39,6 +39,7 @@ import Control.Monad.Catch (MonadMask)
 import Control.Monad.Free
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (ReaderT, ask, asks, local, runReaderT)
+import qualified Crypto.PubKey.RSA as RSA
 import Data.Attoparsec.ByteString
        (Parser, anyWord8, manyTill, string, takeWhile1, word8)
 import Data.Attoparsec.Combinator (lookAhead)
@@ -66,20 +67,20 @@ import Development.Placeholders
 import Network.Simple.TCP (connect, serve)
 import Network.Socket (PortNumber, SockAddr, Socket)
 import Network.Socket.ByteString (recv, sendAll)
+import qualified Network.Yassh.HostKey as HostKey
+import qualified Network.Yassh.HostKey.SshRsa as SshRsa
 import Network.Yassh.Internal
+import Network.Yassh.Internal.KeyExchange (runKeyExchangeServer)
 import Network.Yassh.Internal.ProtocolVersionExchange
        (runProtocolVersionExchange)
-import Network.Yassh.Internal.KeyExchange (runKeyExchangeServer)
+import qualified Network.Yassh.KeyExchange as KeyExchange
+import qualified Network.Yassh.KeyExchange.DiffieHellman
+       as DiffieHellman
 import Paths_yassh (version)
 import System.IO (hFlush, stdout)
 import System.IO.Streams (InputStream, OutputStream)
 import qualified System.IO.Streams as Streams
 import System.IO.Streams.Attoparsec.ByteString (parseFromStream)
-import qualified Crypto.PubKey.RSA as RSA
-import qualified Network.Yassh.HostKey.SshRsa as SshRsa
-import qualified Network.Yassh.KeyExchange.DiffieHellman as DiffieHellman
-import qualified Network.Yassh.HostKey as HostKey
-import qualified Network.Yassh.KeyExchange as KeyExchange
 
 import Data.Bits
 
@@ -113,12 +114,10 @@ defaultClientReceiveBanner is = do
   putStrLn "----------------------- End of banner from the server"
   where
     defaultError _ _ = Just '\xfffd'
-
-    mapControlChars c = 
+    mapControlChars c =
       if isControl c && c /= '\n' && c /= '\r' && c /= '\t'
         then '\xfffd'
         else c
-
 
 defaultVersion :: SshVersion
 defaultVersion = SshVersion "2.0" (BS.concat [libraryName, "-", C8.pack $ showVersion version]) Nothing
@@ -139,7 +138,8 @@ runSshClient :: (MonadIO m, MonadMask m) => String -> SshAction m r -> m r
 runSshClient hostName program = connect hostName "22" (runSshClientConnection program defaultClientSettings)
 
 runSshServer :: PortNumber -> RSA.PrivateKey -> Shell -> IO ()
-runSshServer port rsaPrivKey shell = serve "*" (show port) (runSecure . runSshServerConnection rsaPrivKey shell defaultServerSettings)
+runSshServer port rsaPrivKey shell =
+  serve "*" (show port) (runSecure . runSshServerConnection rsaPrivKey shell defaultServerSettings)
 
 runSecure :: IO () -> IO ()
 runSecure program = catch program (\e -> print (e :: SomeException))
@@ -295,9 +295,13 @@ sshPacketToByteString' payload =
     paddingLengthFieldLength :: Int64
     paddingLengthFieldLength = 1 :: Int64
     paddingLength :: Int64 -> Int64
-    paddingLength blockSize = if multiplePaddingLength blockSize < 4 then blockSize + multiplePaddingLength blockSize else multiplePaddingLength blockSize
+    paddingLength blockSize =
+      if multiplePaddingLength blockSize < 4
+        then blockSize + multiplePaddingLength blockSize
+        else multiplePaddingLength blockSize
     multiplePaddingLength :: Int64 -> Int64
-    multiplePaddingLength blockSize = blockSize - ((payloadLength + paketLengthFieldLength + paddingLengthFieldLength) `mod` blockSize)
+    multiplePaddingLength blockSize =
+      blockSize - ((payloadLength + paketLengthFieldLength + paddingLengthFieldLength) `mod` blockSize)
     paketLength :: Int64
     paketLength = paddingLengthFieldLength + payloadLength + paddingLength 8
 

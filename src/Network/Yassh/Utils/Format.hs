@@ -16,46 +16,39 @@ module Network.Yassh.Utils.Format
   , encodePemDerRsaPrivateKey
   ) where
 
+import Control.Arrow (left)
+import qualified Crypto.PubKey.RSA as RSA
+import Data.ASN1.BinaryEncoding (DER(..))
+import Data.ASN1.Encoding (decodeASN1', encodeASN1')
+import Data.ASN1.Types
+       (ASN1(..), ASN1ConstructionType(..), ASN1Object(..))
+import Data.Bits (shiftR)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
-import qualified Crypto.PubKey.RSA as RSA
-import Data.PEM (pemParseBS, pemWriteBS, pemContent, PEM(..))
-import Data.ASN1.Types (ASN1Object(..), ASN1(..), ASN1ConstructionType(..))
-import Data.ASN1.BinaryEncoding (DER(..))
-import Data.ASN1.Encoding (encodeASN1', decodeASN1')
-import Control.Arrow (left)
-import Data.Bits (shiftR)
+import Data.PEM (PEM(..), pemContent, pemParseBS, pemWriteBS)
 
 instance ASN1Object RSA.PrivateKey where
   toASN1 privKey xs =
-    Start Sequence
-    : IntVal 0
-    : IntVal (RSA.public_n $ RSA.private_pub privKey)
-    : IntVal (RSA.public_e $ RSA.private_pub privKey)
-    : IntVal (RSA.private_d privKey)
-    : IntVal (RSA.private_p privKey)
-    : IntVal (RSA.private_q privKey)
-    : IntVal (RSA.private_dP privKey)
-    : IntVal (RSA.private_dQ privKey)
-    : IntVal (RSA.private_qinv privKey)
-    : End Sequence
-    : xs
-
-  fromASN1 (Start Sequence:IntVal 0:IntVal n:IntVal e:IntVal d:IntVal p:IntVal q:IntVal dP:IntVal dQ:IntVal qinv:End Sequence: xs) =
-    Right (RSA.PrivateKey
-      { RSA.private_pub = RSA.PublicKey
-        { RSA.public_size = sizeInBytes n
-        , RSA.public_n = n
-        , RSA.public_e = e
+    Start Sequence :
+    IntVal 0 :
+    IntVal (RSA.public_n $ RSA.private_pub privKey) :
+    IntVal (RSA.public_e $ RSA.private_pub privKey) :
+    IntVal (RSA.private_d privKey) :
+    IntVal (RSA.private_p privKey) :
+    IntVal (RSA.private_q privKey) :
+    IntVal (RSA.private_dP privKey) : IntVal (RSA.private_dQ privKey) : IntVal (RSA.private_qinv privKey) : End Sequence : xs
+  fromASN1 (Start Sequence:IntVal 0:IntVal n:IntVal e:IntVal d:IntVal p:IntVal q:IntVal dP:IntVal dQ:IntVal qinv:End Sequence:xs) =
+    Right
+      ( RSA.PrivateKey
+        { RSA.private_pub = RSA.PublicKey {RSA.public_size = sizeInBytes n, RSA.public_n = n, RSA.public_e = e}
+        , RSA.private_d = d
+        , RSA.private_p = p
+        , RSA.private_q = q
+        , RSA.private_dP = dP
+        , RSA.private_dQ = dQ
+        , RSA.private_qinv = qinv
         }
-      , RSA.private_d = d
-      , RSA.private_p = p
-      , RSA.private_q = q
-      , RSA.private_dP = dP
-      , RSA.private_dQ = dQ
-      , RSA.private_qinv = qinv
-      }, xs)
-
+      , xs)
   fromASN1 _ = Left "fromASN1: RSA.PrivateKey: unexpected format"
 
 rsaPrivateKeyLabel = "RSA PRIVATE KEY"

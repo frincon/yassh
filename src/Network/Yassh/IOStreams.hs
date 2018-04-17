@@ -18,13 +18,13 @@ module Network.Yassh.IOStreams
   ( runSshServer
   ) where
 
+import qualified Crypto.PubKey.RSA as RSA
 import Data.ByteString (ByteString)
 import Development.Placeholders
 import Network.Socket (PortNumber)
 import qualified Network.Yassh as Yassh
 import System.IO.Streams (InputStream, OutputStream)
 import qualified System.IO.Streams as Streams
-import qualified Crypto.PubKey.RSA as RSA
 
 runSshServer :: PortNumber -> RSA.PrivateKey -> ((InputStream ByteString, OutputStream ByteString) -> IO ()) -> IO ()
 runSshServer port rsaPrivateKey shellIO =
