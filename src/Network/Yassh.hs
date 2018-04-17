@@ -91,7 +91,6 @@ defaultServerSettings =
   MkSshSettings
   { sshSettingsOnProtocolVersionExchange = defaultOnProtocolVersionExchange
   , sshSettingsReceiveBanner = undefined -- no banner from clients
-  , sshSettingsProtocolVersionExchangeSizeLimitBytes = defaultProtocolVersionExchangeSizeLimitBytes
   , sshSettingsIgnoreInterval = defaultIgnoreInterval
   , sshSettingsVersion = defaultVersion
   }
@@ -101,7 +100,6 @@ defaultClientSettings =
   MkSshSettings
   { sshSettingsOnProtocolVersionExchange = defaultOnProtocolVersionExchange
   , sshSettingsReceiveBanner = defaultClientReceiveBanner -- print banner to stdout
-  , sshSettingsProtocolVersionExchangeSizeLimitBytes = maxBound -- TODO It can blow up the memory as the reading is full before call to OnReceiveBanner
   , sshSettingsIgnoreInterval = defaultIgnoreInterval
   , sshSettingsVersion = defaultVersion
   }
@@ -124,9 +122,6 @@ defaultVersion = SshVersion "2.0" (BS.concat [libraryName, "-", C8.pack $ showVe
 
 defaultOnProtocolVersionExchange :: SshVersion -> IO ()
 defaultOnProtocolVersionExchange = print
-
-defaultProtocolVersionExchangeSizeLimitBytes :: Int64
-defaultProtocolVersionExchangeSizeLimitBytes = 64 * 1024
 
 defaultIgnoreInterval :: TimeSpan
 defaultIgnoreInterval = minutes 1
@@ -163,9 +158,8 @@ initializeConnection rsaPrivKey settings role socket = do
   runReaderT (runFirstKeyExchange [SshRsa.new $ SshRsa.Configuration rsaPrivKey] [DiffieHellman.diffieHellmanGroup14Sha1]) context
 
 protocolExchange :: MonadIO m => (InputStream ByteString, OutputStream ByteString) -> SshSettings -> SshRole -> m SshVersion
-protocolExchange (is, os) settings role = do
-  limitedInputStream <- liftIO $ Streams.takeBytes (sshSettingsProtocolVersionExchangeSizeLimitBytes settings) is
-  sshVersion <- liftIO $ runProtocolVersionExchange (limitedInputStream, os) role settings
+protocolExchange is'os settings role = do
+  sshVersion <- liftIO $ runProtocolVersionExchange is'os role settings
   liftIO $ sshSettingsOnProtocolVersionExchange settings sshVersion
   return sshVersion
 

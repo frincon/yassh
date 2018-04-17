@@ -71,7 +71,6 @@ data SshVersion = SshVersion
 data SshSettings = MkSshSettings
   { sshSettingsOnProtocolVersionExchange :: SshVersion -> IO ()
   , sshSettingsReceiveBanner :: InputStream ByteString -> IO ()
-  , sshSettingsProtocolVersionExchangeSizeLimitBytes :: Int64
   , sshSettingsIgnoreInterval :: TimeSpan
   , sshSettingsVersion :: SshVersion
   }

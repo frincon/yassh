@@ -55,14 +55,6 @@ main =
     -}
    do
     describe "Network.Yassh.runProtocolVersionExchange" $ do
-      it "Should fail if the stream is bigger then protocolExchangeLimitBytes" $ do
-        is <- liftIO $ Streams.fromByteString $ BC.append (BC.replicate 1024 'a') "\r\nSSH-Pepito"
-        os <- liftIO $ Streams.makeOutputStream (\input -> return ())
-        runProtocolVersionExchange
-          (is, os)
-          SshRoleClient
-          (defaultClientSettings {sshSettingsProtocolVersionExchangeSizeLimitBytes = 1024}) `shouldThrow`
-          anyException -- TODO make it explicit
       it "Should return the correct version without comments and wothout banner" $ do
         is <- liftIO $ Streams.fromByteString "SSH-2.0-test\r\n"
         os <- liftIO $ Streams.makeOutputStream (\input -> return ())
