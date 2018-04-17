@@ -16,15 +16,11 @@
 {-# LANGUAGE LambdaCase #-}
 
 module Network.Yassh
-  -- ( bannerLines
-  -- , receiveBanner
   ( runSshServer
   , runSshClient
   , defaultServerSettings
   , defaultClientSettings
   , SshVersion(..)
-  -- , protocolVersionExchangeClient
-  -- , protocolVersionExchangeServer
   , SshAction
   , SshContext
   ) where
@@ -177,7 +173,7 @@ runFirstKeyExchange hostKeyHandles keyExchangeHandles = do
       keyExchangeHandles
       (fromRole role (sshSettingsVersion settings) (peerVersion))
       (receivePacket is)
-      (\p -> (putStrLn "Sending packet" >> (Streams.writeTo os $ Just p)))
+      (\p -> putStrLn "Sending packet" >> Streams.writeTo os (Just p))
   ask -- TODO Make another context with the keys
   where
     receivePacket :: InputStream SshRawPacket -> [Word8] -> IO SshRawPacket
