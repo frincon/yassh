@@ -24,7 +24,7 @@ import Data.ByteString.Char8 (unpack)
 import Data.Maybe (isJust)
 import Network.Yassh.Internal
 
-type Sign = ByteString -> ByteString
+type Sign = ByteString -> [SshData]
 
 type Encrypt = ByteString -> ByteString
 
@@ -32,7 +32,7 @@ data ServerHandle = ServerHandle
   { name :: ByteString
   , sign :: Maybe Sign
   , encrypt :: Maybe Encrypt
-  , encodedKey :: ByteString
+  , encodedKey :: [SshData]
   }
 
 isEncryptionCapable :: ServerHandle -> Bool

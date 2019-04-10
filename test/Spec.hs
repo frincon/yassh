@@ -25,6 +25,9 @@ import qualified System.IO.Streams as Streams
 import System.IO.Streams.ByteString (fromByteString)
 import Test.Hspec
 
+import qualified Network.Yassh.HostKey.SshRsaSpec
+import qualified Network.Yassh.Internal.KeyExchange.DiffieHellmanSpec
+
 -- TODO Make a memory test for large banners
 main :: IO ()
 main =
@@ -54,6 +57,8 @@ main =
         receiveBanner is `shouldThrow` anyException -- TODO make it explicit
     -}
    do
+    Network.Yassh.HostKey.SshRsaSpec.spec
+    Network.Yassh.Internal.KeyExchange.DiffieHellmanSpec.spec
     describe "Network.Yassh.runProtocolVersionExchange" $ do
       it "Should return the correct version without comments and wothout banner" $ do
         is <- liftIO $ Streams.fromByteString "SSH-2.0-test\r\n"

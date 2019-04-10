@@ -70,7 +70,7 @@ import Network.Yassh.Internal.KeyExchange (runKeyExchangeServer)
 import Network.Yassh.Internal.ProtocolVersionExchange
        (runProtocolVersionExchange)
 import qualified Network.Yassh.KeyExchange as KeyExchange
-import qualified Network.Yassh.KeyExchange.DiffieHellman
+import qualified Network.Yassh.Internal.KeyExchange.DiffieHellman
        as DiffieHellman
 import Paths_yassh (version)
 import System.IO (hFlush, stdout)

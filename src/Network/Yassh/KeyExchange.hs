@@ -35,7 +35,7 @@ data ServerHandle = ServerHandle
   { name :: ByteString
   , requiresHostKeyEncryptionCapable :: Bool
   , requiresHostKeySignatureCapable :: Bool
-  , runKex :: KexServerContext -> ([Word8] -> IO SshRawPacket) -> (SshPacket -> IO ()) -> IO ()
+  , runKex :: KexServerContext -> ([Word8] -> IO SshRawPacket) -> (SshPacket -> IO ()) -> IO (ByteString, ByteString)
   }
 
 instance Show ServerHandle where

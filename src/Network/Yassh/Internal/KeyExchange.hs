@@ -122,7 +122,7 @@ runKeyExchangeServer hostKeyHandlers keyExchangeHandles versions recv send = do
         , KeyExchange.kexContextMsgInit = msgInit
         , KeyExchange.kexContextHostKeyHandle = hostKeyHandle
         }
-  KeyExchange.runKex keyExchangeHandle kexContext recv send
+  void $ KeyExchange.runKex keyExchangeHandle kexContext recv send
 
 doAlgorithmNegotiation ::
      [HostKey.ServerHandle]

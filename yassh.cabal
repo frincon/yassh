@@ -18,15 +18,15 @@ library
   exposed-modules:     Network.Yassh
                      , Network.Yassh.IOStreams
                      , Network.Yassh.KeyExchange
-                     , Network.Yassh.KeyExchange.DiffieHellman
                      , Network.Yassh.HostKey
                      , Network.Yassh.HostKey.SshRsa
                      , Network.Yassh.Utils.Format
                      , Network.Yassh.Internal
                      , Network.Yassh.Internal.ProtocolVersionExchange
+                     , Network.Yassh.Internal.KeyExchange.DiffieHellman
   other-modules:       Paths_yassh
                      , Network.Yassh.Internal.KeyExchange
-  build-depends:       base >= 4.7 && < 5
+  build-depends:       base >= 4.10 && < 5
                      , network
                      , network-simple
                      , bytestring
@@ -77,12 +77,18 @@ test-suite yassh-test
   type:                exitcode-stdio-1.0
   hs-source-dirs:      test
   main-is:             Spec.hs
-  build-depends:       base
+  other-modules:       Network.Yassh.HostKey.SshRsaSpec
+                     , Network.Yassh.Internal.KeyExchange.DiffieHellmanSpec
+  build-depends:       base >= 4.10 && < 5
                      , yassh
                      , attoparsec
                      , io-streams
                      , bytestring
                      , hspec
+                     , cryptonite
+                     , placeholders
+                     , stm
+                     , memory
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   default-language:    Haskell2010
 

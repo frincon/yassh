@@ -1,5 +1,6 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Network.Yassh.HostKey.SshRsa
   ( Configuration(..)
@@ -14,6 +15,8 @@ import GHC.Stack
 import Network.Yassh.HostKey
 import Network.Yassh.Internal
 
+import Development.Placeholders
+
 data Configuration = Configuration
   { privateKey :: PrivateKey
   }
@@ -23,14 +26,17 @@ new Configuration {..} =
   ServerHandle
   { name = "ssh-rsa"
   , sign = Just $ privateSign privateKey
-  , encrypt = Nothing -- TODO It is encryption capable
-  , encodedKey = sshEncode [SshString "ssh-rsa", SshMPint pub_e, SshMPint pub_n]
+  , encrypt = Nothing -- TODO Is encryption capable?
+  , encodedKey = [SshString "ssh-rsa", SshMPint pub_e, SshMPint pub_n]
   }
   where
     pub_e = public_e $ private_pub privateKey
     pub_n = public_n $ private_pub privateKey
 
+
+-- TODO this either is litle bit ugly
 privateSign :: HasCallStack => PrivateKey -> Sign
 privateSign privateKey input =
-  sshEncode
-    [SshString "ssh-rsa", SshString $ either (error . show) id $ Crypto.PubKey.RSA.PKCS15.sign Nothing (Just SHA1) privateKey input]
+    [ SshString "ssh-rsa"
+    , SshString $ either (error . show) id $ Crypto.PubKey.RSA.PKCS15.sign Nothing (Just SHA1) privateKey input
+    ]

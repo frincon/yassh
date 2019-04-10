@@ -40,6 +40,7 @@ module Network.Yassh.Internal
   , sshEncode
   , i2bs
   , bs2i
+  , safeReadHex
   ) where
 
 import Control.Monad.Reader (ReaderT)
@@ -57,6 +58,7 @@ import Data.Proxy (Proxy)
 import Data.Time.TimeSpan (TimeSpan)
 import Data.Word (Word32, Word8)
 import System.IO.Streams (InputStream, OutputStream)
+import Numeric (readHex)
 
 data SshRole
   = SshRoleClient
@@ -105,6 +107,7 @@ data SshData
   | SshNameList [ByteString]
   | SshUInt32 Word32
   | SshMPint Integer
+  deriving (Show, Eq)
 
 class ToSshPacket t where
   toSshPacket :: t -> SshPacket
@@ -214,3 +217,8 @@ integerLogBase b i =
                  then l
                  else doDiv (i `div` b) (l + 1)
          in doDiv (i `div` (b ^ l)) l
+
+safeReadHex :: String -> Integer
+safeReadHex input = case readHex input of
+  [(x, "")] -> x
+  _ -> undefined
