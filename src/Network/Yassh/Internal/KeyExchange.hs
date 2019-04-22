@@ -16,6 +16,10 @@
 
 module Network.Yassh.Internal.KeyExchange
   ( runKeyExchangeServer
+  , runAlgorithmNegotiation
+  , resolveAlgorithms
+  , NegotiationSet(..)
+  , NegotiationResult(..)
   ) where
 
 import Control.Monad (void, when)
@@ -25,17 +29,18 @@ import Data.Function (on)
 import Crypto.Hash
 import Crypto.Number.Serialize
 import Crypto.PubKey.DH
+import Crypto.Random
 
 -- import Crypto.PubKey.RSA
 -- import Crypto.PubKey.RSA.PKCS15
 import Data.Binary.Get
        (Get, getByteString, getInt32be, getRemainingLazyByteString,
-        getWord32be, getWord8, runGet, runGetIncremental)
-import Data.Binary.Get
-       (Get, getByteString, getInt32be, getRemainingLazyByteString,
-        getWord32be, getWord8, runGet, runGetIncremental)
+        getWord32be, getWord8, runGetOrFail, runGetIncremental, ByteOffset)
 import Data.ByteArray (convert)
-import Data.ByteArray (convert)
+import Data.Int (Int64)
+import Data.List.NonEmpty (NonEmpty)
+import Data.Bifunctor (first)
+import qualified Data.List.NonEmpty as NE
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.ByteString (ByteString)
@@ -44,9 +49,9 @@ import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Either (either)
-import Data.List (find)
+import Data.List (find, intersect)
+import Control.Concurrent.Async (concurrently)
 import Data.Maybe (catMaybes, fromMaybe, isJust, maybe)
-import Data.Proxy (Proxy(Proxy))
 import Data.Proxy (Proxy(Proxy))
 import Data.Word (Word8)
 import Data.Word8 (Word8)
@@ -61,51 +66,81 @@ newtype Cookie =
   deriving (Show)
 
 data NegotiationSet = NegotiationSet
-  { kexAlgs :: [ByteString]
-  , serverHostKeyAlgs :: [ByteString]
-  , encryptionAlgs :: BiDirectional [ByteString]
-  , macAlgs :: BiDirectional [ByteString]
-  , compressionAlgs :: BiDirectional [ByteString]
+  { kexAlgs :: NonEmpty ByteString
+  , serverHostKeyAlgs :: NonEmpty ByteString
+  , encryptionAlgs :: BiDirectional (NonEmpty ByteString)
+  , macAlgs :: BiDirectional (NonEmpty ByteString)
+  , compressionAlgs :: BiDirectional (NonEmpty ByteString)
   , languages :: BiDirectional [ByteString]
   }
+  deriving (Show, Eq)
 
-data BiDirectional a = BiDirectional
-  { clientToServer :: a
-  , serverToClient :: a
-  }
+data NegotiationResult = 
+  NegotiationResult 
+    { kexAlgo :: ByteString
+    , serverHostKeyAlgo :: ByteString
+    , encryptionAlgo :: BiDirectional ByteString
+    , macAlgo :: BiDirectional ByteString
+    , compressionAlgo :: BiDirectional ByteString
+    , language :: BiDirectional ByteString
+    }
+  deriving (Show, Eq)
 
-newCookie :: Cookie
-newCookie = MkCookie $ BS.replicate 16 55 -- TODO make random
+resolveAlgorithms :: (ByteString -> ByteString -> Bool) -> BiDirectional NegotiationSet -> Either String NegotiationResult
+resolveAlgorithms isKexCompatible (BiDirectional clientSet serverSet) = 
+  let
+    intersect' func = intersect (func clientSet) (func serverSet) 
+    kex'' = intersect' (NE.toList . kexAlgs)
+    kex' = filter (\kexAlgo -> any (isKexCompatible kexAlgo) key') kex''
+    key' = intersect' (NE.toList . serverHostKeyAlgs)
+    encCtoS' = intersect' (NE.toList . clientToServer . encryptionAlgs)
+    encStoC' = intersect' (NE.toList . serverToClient . encryptionAlgs)
+    macCtoS' = intersect' (NE.toList . clientToServer . macAlgs)
+    macStoC' = intersect' (NE.toList . serverToClient . macAlgs)
+    compCtoS' = intersect' (NE.toList . clientToServer . compressionAlgs)
+    compStoC' = intersect' (NE.toList . serverToClient . compressionAlgs)
+    
+    firstOrFail errorMessage [] = Left errorMessage
+    firstOrFail _ (x:xs) = Right x
+  in do
+    kex <- if NE.head (kexAlgs clientSet) == NE.head (kexAlgs serverSet)
+      then Right $ NE.head (kexAlgs clientSet)
+      else firstOrFail "No Key Exchange Algorithm compatible" kex'
+    key <- firstOrFail "No Host Key Algorithm compatible" $ filter (\k -> isKexCompatible kex k) key'
+    encCtoS <- firstOrFail "No Encryption Algorithm Client to Server compatible" $ encCtoS'
+    encStoC <- firstOrFail "No Encryption Algorithm Server to Client compatible" $ encStoC'
+    macCtoS <- firstOrFail "No MAC Algorithm Client to Server compatible" $ macCtoS'
+    macStoC <- firstOrFail "No MAC Algorithm Server to Client compatible" $ macStoC'
+    compCtoS <- firstOrFail "No Compression Algorithm Client to Server compatible" $ compCtoS'
+    compStoC <- firstOrFail "No Compression Algorithm Server to Client compatible" $ compStoC'
 
--- TODO Support different algorithms server to client thatn client to server
--- TODO Support following first paket?
-mkSshPacketKexInit :: Cookie -> NegotiationSet -> SshPacket
-mkSshPacketKexInit (MkCookie cookieBytes) negotiationSet =
-  SshPacket
-    c_SSH_MSG_KEXINIT
-    [ SshByteArray 16 cookieBytes
-    , SshNameList $ kexAlgs negotiationSet
-    , SshNameList $ serverHostKeyAlgs negotiationSet
-    , SshNameList $ clientToServer $ encryptionAlgs negotiationSet
-    , SshNameList $ serverToClient $ encryptionAlgs negotiationSet
-    , SshNameList $ clientToServer $ macAlgs negotiationSet
-    , SshNameList $ serverToClient $ macAlgs negotiationSet
-    , SshNameList $ clientToServer $ compressionAlgs negotiationSet
-    , SshNameList $ serverToClient $ compressionAlgs negotiationSet
-    , SshNameList $ clientToServer $ languages negotiationSet
-    , SshNameList $ serverToClient $ languages negotiationSet
-    , SshBoolean False
-    , SshUInt32 0 -- Future use
-    ]
+    return $ 
+      NegotiationResult kex key (BiDirectional encCtoS encStoC) (BiDirectional macCtoS macStoC) (BiDirectional compCtoS compStoC) (BiDirectional "" "")
 
-tempEncryptionAlgs = ["aes128-ctr", "3des-cbc"] :: [ByteString]
-
-tempMacAlgs = ["hmac-sha1"]
-
-tempCompressionAlgs = ["none"]
-
-tempLanguages = []
-
+runAlgorithmNegotiation :: 
+     ([Word8] -> IO SshRawPacket) 
+  -> (SshPacket -> IO ())
+  -> (BiDirectional NegotiationSet -> Either String NegotiationResult)
+  -> NegotiationSet
+  -> IO NegotiationResult
+runAlgorithmNegotiation recv send negotiate negotiationSet = do
+  (recvResult, _) <- concurrently recvSshMsgKexinit sendSshMsgKexinit
+  case recvResult of
+    Left errorMessage -> fail errorMessage
+    Right (_, clientNegotiationSet, following) -> do
+      let negotiationSets = BiDirectional clientNegotiationSet negotiationSet
+      when (guessIsWrong negotiationSets && following) discardPacket
+      case  negotiate $ BiDirectional clientNegotiationSet negotiationSet of
+        Left errorMsg -> fail errorMsg
+        Right a -> return a
+    where
+      discardPacket = void $ recv [30..49] -- TODO Change to constant
+      recvSshMsgKexinit = readKexInitPacket <$> recv [c_SSH_MSG_KEXINIT]
+      sendSshMsgKexinit = do
+        cookie <- newCookie
+        send $ mkSshPacketKexInit cookie negotiationSet
+      guessIsWrong (BiDirectional ctos stoc) = NE.head (kexAlgs ctos) /= NE.head (kexAlgs stoc)
+  
 runKeyExchangeServer ::
      [HostKey.ServerHandle]
   -> [KeyExchange.ServerHandle]
@@ -113,109 +148,45 @@ runKeyExchangeServer ::
   -> ([Word8] -> IO SshRawPacket)
   -> (SshPacket -> IO ())
   -> IO ()
-runKeyExchangeServer hostKeyHandlers keyExchangeHandles versions recv send = do
-  putStrLn "Running key exchange"
-  (hostKeyHandle, keyExchangeHandle, msgInit) <- doAlgorithmNegotiation hostKeyHandlers keyExchangeHandles recv send
-  let kexContext =
-        KeyExchange.KexContext
-        { KeyExchange.kexContextIdentificationString = fmap toIdentificationString versions
-        , KeyExchange.kexContextMsgInit = msgInit
-        , KeyExchange.kexContextHostKeyHandle = hostKeyHandle
-        }
-  void $ KeyExchange.runKex keyExchangeHandle kexContext recv send
+runKeyExchangeServer hostKeyHandlers keyExchangeHandles versions recv send = $notImplemented
 
-doAlgorithmNegotiation ::
-     [HostKey.ServerHandle]
-  -> [KeyExchange.ServerHandle]
-  -> ([Word8] -> IO SshRawPacket)
-  -> (SshPacket -> IO ())
-  -> IO (HostKey.ServerHandle, KeyExchange.ServerHandle, SshClientServer SshRawPacket)
-doAlgorithmNegotiation hostKeyHandles keyExchangeHandles recv send = do
-  putStrLn "Starting Algorithm Negotiation"
-  let ourNegotiationSet = buildNegotiationSet
-  kexInitRawPacketSent <- sendSshMsgKexInit ourNegotiationSet
-  (kexInitRawPacketReceived, theirNegotiationSet, followingPacket) <- receiveSshMsgKexInit
-  discardFollowingPacketWhenGuessIsWrong followingPacket ourNegotiationSet theirNegotiationSet
-  let result = negotiateAlgorithms ourNegotiationSet theirNegotiationSet
-  putStrLn $ "Result: " ++ show result
-  maybe (error "No algorithm found") return $
-    fmap (\(a, b) -> (a, b, SshClientServer kexInitRawPacketReceived kexInitRawPacketSent)) result
+newCookie :: IO Cookie
+newCookie = MkCookie <$> getRandomBytes 16
+
+-- TODO Support following first paket?
+mkSshPacketKexInit :: Cookie -> NegotiationSet -> SshPacket
+mkSshPacketKexInit (MkCookie cookieBytes) negotiationSet =
+  SshPacket
+    c_SSH_MSG_KEXINIT
+    [ SshByteArray 16 cookieBytes
+    , SshNameList $ NE.toList $ kexAlgs negotiationSet
+    , SshNameList $ NE.toList $ serverHostKeyAlgs negotiationSet
+    , SshNameList $ NE.toList $ clientToServer $ encryptionAlgs negotiationSet
+    , SshNameList $ NE.toList $ serverToClient $ encryptionAlgs negotiationSet
+    , SshNameList $ NE.toList $ clientToServer $ macAlgs negotiationSet
+    , SshNameList $ NE.toList $ serverToClient $ macAlgs negotiationSet
+    , SshNameList $ NE.toList $ clientToServer $ compressionAlgs negotiationSet
+    , SshNameList $ NE.toList $ serverToClient $ compressionAlgs negotiationSet
+    , SshNameList $ clientToServer $ languages negotiationSet
+    , SshNameList $ serverToClient $ languages negotiationSet
+    , SshBoolean False
+    , SshUInt32 0 -- Future use
+    ]
+
+readKexInitPacket :: SshRawPacket -> Either String (Cookie, NegotiationSet, Bool)
+readKexInitPacket packet = first mapError $ runGet' readNegotiationGet $ packet
   where
-    buildNegotiationSet :: NegotiationSet
-    buildNegotiationSet =
-      NegotiationSet
-      { kexAlgs = KeyExchange.name <$> keyExchangeHandles
-      , serverHostKeyAlgs = HostKey.name <$> hostKeyHandles
-      , encryptionAlgs = BiDirectional tempEncryptionAlgs tempEncryptionAlgs
-      , macAlgs = BiDirectional tempMacAlgs tempMacAlgs
-      , compressionAlgs = BiDirectional tempCompressionAlgs tempCompressionAlgs
-      , languages = BiDirectional tempLanguages tempLanguages
-      }
-    guessIsWrong :: NegotiationSet -> NegotiationSet -> Bool
-    guessIsWrong ourNegotiationSet theirNegotiationSet = head (kexAlgs ourNegotiationSet) /= head (kexAlgs theirNegotiationSet)
-    sendSshMsgKexInit :: NegotiationSet -> IO SshRawPacket
-    sendSshMsgKexInit negotiationSet = do
-      let kexInitPacket = mkSshPacketKexInit newCookie negotiationSet
-      send kexInitPacket
-      putStrLn "SSH_MSG_KEXINIT Sent"
-      return $ toSshRawPacket kexInitPacket
-    receiveSshMsgKexInit :: IO (SshRawPacket, NegotiationSet, Bool)
-    receiveSshMsgKexInit = do
-      kexInitRawPacketReceived <- recv [c_SSH_MSG_KEXINIT]
-      let (_, theirNegotiationSet, followingPacket) = readKexInitPacket kexInitRawPacketReceived
-      putStrLn "SSH_MSG_KEXINIT Received"
-      return (kexInitRawPacketReceived, theirNegotiationSet, followingPacket)
-    discardFollowingPacketWhenGuessIsWrong :: Bool -> NegotiationSet -> NegotiationSet -> IO ()
-    discardFollowingPacketWhenGuessIsWrong followingPacket ourNegotiationSet theirNegotiationSet =
-      when
-        (followingPacket && guessIsWrong ourNegotiationSet theirNegotiationSet)
-        (void $ recv [30 .. 49]) -- Discard the next packet
-    negotiateAlgorithms :: NegotiationSet -> NegotiationSet -> Maybe (HostKey.ServerHandle, KeyExchange.ServerHandle)
-    negotiateAlgorithms serverNegotiationSet clientNegotiationSet = do
-      keyExchangeHandle <-
-        if guessIsWrong serverNegotiationSet clientNegotiationSet
-          then negotiateKexAlgorithm clientNegotiationSet
-          else find (\handle -> KeyExchange.name handle == head (kexAlgs serverNegotiationSet)) keyExchangeHandles
-      hostKeyHandle <- negotiateHostKeyAlgorithm clientNegotiationSet keyExchangeHandle
-      return (hostKeyHandle, keyExchangeHandle)
-    negotiateKexAlgorithm :: NegotiationSet -> Maybe KeyExchange.ServerHandle
-    negotiateKexAlgorithm clientNegotiationSet =
-      let supportedKexHandles =
-            catMaybes $
-            fmap (\name -> find (\handle -> KeyExchange.name handle == name) keyExchangeHandles) (kexAlgs clientNegotiationSet)
-      in find (isJust . negotiateHostKeyAlgorithm clientNegotiationSet) supportedKexHandles
-    negotiateHostKeyAlgorithm :: NegotiationSet -> KeyExchange.ServerHandle -> Maybe HostKey.ServerHandle
-    negotiateHostKeyAlgorithm clientNegotiationSet kexHandle =
-      let supportedHostKeyHandles =
-            catMaybes $
-            fmap (\name -> find (\handle -> HostKey.name handle == name) hostKeyHandles) (serverHostKeyAlgs clientNegotiationSet)
-      in find isValidKexAlgorithm supportedHostKeyHandles
-      where
-        isValidKexAlgorithm :: HostKey.ServerHandle -> Bool
-        isValidKexAlgorithm hostKeyHandle =
-          (not (KeyExchange.requiresHostKeyEncryptionCapable kexHandle) || isJust (HostKey.encrypt hostKeyHandle)) &&
-          (not (KeyExchange.requiresHostKeySignatureCapable kexHandle) || isJust (HostKey.sign hostKeyHandle))
 
-findFirst :: (a -> Bool) -> [a] -> Maybe a
-findFirst _ [] = Nothing
-findFirst cond (x:xs) =
-  if cond x
-    then Just x
-    else findFirst cond xs
+    mapError :: (LBS.ByteString, ByteOffset, String)  -> String
+    mapError (_, offset, errorMessage) = "Invalid SSH_MSG_KEXINIT at " ++ show offset ++ ": " ++ errorMessage 
 
-exists :: (a -> Bool) -> [a] -> Bool
-exists cond list = isJust $ find cond list
-
-readKexInitPacket :: SshRawPacket -> (Cookie, NegotiationSet, Bool)
-readKexInitPacket packet = runGet readNegotiationGet $ LBS.fromStrict $ sshRawPacketPayload packet
-  where
     readNegotiationGet :: Get (Cookie, NegotiationSet, Bool)
     readNegotiationGet = do
-      cookie <- fmap MkCookie (getByteString 16)
-      list1 <- getNameList
-      list2 <- getNameList
-      list3 <- getNameList
-      list4 <- getNameList
+      cookie <- MkCookie <$> (getByteString 16)
+      list1 <- getNonEmptyNameList
+      list2 <- getNonEmptyNameList
+      list3 <- getNonEmptyNameList
+      list4 <- getNonEmptyNameList
       list5 <- getNameList
       list6 <- getNameList
       list7 <- getNameList
@@ -227,11 +198,29 @@ readKexInitPacket packet = runGet readNegotiationGet $ LBS.fromStrict $ sshRawPa
       let negotiationSet = NegotiationSet {kexAlgs = list1, serverHostKeyAlgs = list2, encryptionAlgs = BiDirectional list3 list4}
       return (cookie, negotiationSet, firstKexPacketFollows)
 
+runGet' :: Get a -> SshRawPacket -> Either (LBS.ByteString, ByteOffset, String) a 
+runGet' parser packet = 
+  let result = runGetOrFail parser $ LBS.fromStrict $ sshRawPacketPayload packet
+  in
+    case result of
+      Left err -> Left err
+      Right (remain, offset, result') -> 
+        if LBS.null remain
+          then Right result'
+          else Left (remain, offset, "Not all data has been consumed") -- TODO This should happen for all the packets? Needs to go to a level up?
+
 getNameList :: Get [ByteString]
 getNameList = do
   nameListLength <- fmap fromIntegral getWord32be
   listWithCommas <- getByteString nameListLength
   return $ C8.split ',' listWithCommas
+
+getNonEmptyNameList :: Get (NonEmpty ByteString)
+getNonEmptyNameList = do
+  nameListLength <- fromIntegral <$> getWord32be
+  if nameListLength == 0
+    then fail "Non Empty list expected, empty list received"
+    else (NE.fromList . C8.split ',') <$> getByteString nameListLength
 
 getBoolean :: Get Bool
 getBoolean = do

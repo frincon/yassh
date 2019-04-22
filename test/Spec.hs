@@ -25,8 +25,10 @@ import qualified System.IO.Streams as Streams
 import System.IO.Streams.ByteString (fromByteString)
 import Test.Hspec
 
+import qualified Network.Yassh.HostKeySpec
 import qualified Network.Yassh.HostKey.SshRsaSpec
 import qualified Network.Yassh.Internal.KeyExchange.DiffieHellmanSpec
+import qualified Network.Yassh.Internal.KeyExchangeSpec
 
 -- TODO Make a memory test for large banners
 main :: IO ()
@@ -57,7 +59,9 @@ main =
         receiveBanner is `shouldThrow` anyException -- TODO make it explicit
     -}
    do
+    Network.Yassh.HostKeySpec.spec
     Network.Yassh.HostKey.SshRsaSpec.spec
+    Network.Yassh.Internal.KeyExchangeSpec.spec
     Network.Yassh.Internal.KeyExchange.DiffieHellmanSpec.spec
     describe "Network.Yassh.runProtocolVersionExchange" $ do
       it "Should return the correct version without comments and wothout banner" $ do

@@ -28,6 +28,7 @@ module Network.Yassh.Internal
   , ToSshPacket(..)
   , FromSshRawPacket(..)
   , ToSshRawPacket(..)
+  , BiDirectional(..)
   , c_SSH_MSG_KEXINIT
   , c_SSH_MSG_IGNORE
   , c_SSH_MSG_KEXDH_INIT
@@ -85,11 +86,18 @@ data SshContext = MkSshContext
   , sshContextPacketStreams :: (InputStream SshRawPacket, OutputStream SshPacket)
   }
 
+data BiDirectional a = BiDirectional
+  { clientToServer :: a
+  , serverToClient :: a
+  }
+  deriving (Show, Eq)
+
 type SshAction = ReaderT SshContext
 
 data SshPacket =
   SshPacket Word8
             [SshData]
+  deriving (Show)
 
 data SshRawPacket =
   SshRawPacket Word8

@@ -33,14 +33,14 @@ import Data.ByteArray (convert)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 
-import Control.Concurrent.STM (atomically)
-import Control.Concurrent.STM.TVar (newTVarIO, modifyTVar, readTVarIO)
 import Test.Hspec
 
 import Network.Yassh.Internal.KeyExchange.DiffieHellman
 import Network.Yassh.KeyExchange
 import qualified Network.Yassh.HostKey as HostKey
 import Network.Yassh.Internal
+
+import Network.Yassh.Test.Utils
 
 spec :: Spec
 spec = do
@@ -139,7 +139,6 @@ spec = do
             key `shouldBe` (convert sharedKey)
             h `shouldBe` exchangeHash
 
-
 isMPint :: SshData -> Bool
 isMPint (SshMPint _) = True
 isMPint _ = False
@@ -160,22 +159,3 @@ givenKexServerContext =
       }
     }
 
-mockP1 :: IO (p -> IO r, IO [p])
-mockP1 = do
-  calls <- newTVarIO []
-  return 
-    (\i -> do
-      atomically $ modifyTVar calls (\xs -> (i:xs))
-      return undefined
-    , readTVarIO calls
-    )
-
-mockP1' :: (p -> IO r) -> IO (p -> IO r, IO [p])
-mockP1' func = do
-  calls <- newTVarIO []
-  return 
-    (\i -> do
-      atomically $ modifyTVar calls (\xs -> (i:xs))
-      func i
-    , readTVarIO calls
-    )
